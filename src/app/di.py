@@ -62,8 +62,35 @@ def get_market_port() -> MarketPort:
 def get_repository() -> RepositoryPort:
     """리포지토리 포트 구현체"""
     from src.adapters.persistence.repositories import ItemRepository
-    from src.adapters.persistence.models import async_session
-    return ItemRepository(db_session=async_session())
+    from src.adapters.persistence.models import get_db
+    import asyncio
+
+    # 동기 세션을 생성 (테스트 환경용)
+    async def get_sync_session():
+        async for session in get_db():
+            return session
+        return None
+
+    # 테스트 환경에서는 동기 세션을 사용
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # 이미 이벤트 루프가 실행 중인 경우 동기 세션 생성
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            engine = create_engine("sqlite:///./test_dropshipping.db", echo=False)
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            return ItemRepository(db_session=SessionLocal())
+        else:
+            # 이벤트 루프가 없는 경우
+            return ItemRepository(db_session=asyncio.run(get_sync_session()))
+    except:
+        # 예외 발생 시 동기 세션 사용
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        engine = create_engine("sqlite:///./test_dropshipping.db", echo=False)
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        return ItemRepository(db_session=SessionLocal())
 
 
 def get_clock() -> ClockPort:

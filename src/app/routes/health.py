@@ -29,3 +29,9 @@ async def health_check():
             "timestamp": datetime.now().isoformat(),
             "error": str(e)
         }
+
+
+@router.options("/health")
+async def health_check_options():
+    """헬스체크 OPTIONS 요청 처리"""
+    return {"message": "OK"}

@@ -14,22 +14,41 @@ settings = get_settings()
 # 동기 엔진 (Alembic에서 사용)
 sync_engine = create_engine(settings.database_url, echo=settings.log_level == "DEBUG")
 
+# 비동기 엔진 (애플리케이션에서 사용) - SQLite URL이 아닐 때만 생성
+if settings.database_url.startswith("sqlite"):
+    async_engine = None
+    async_session = None
+else:
+    async_engine = create_async_engine(settings.database_url, echo=settings.log_level == "DEBUG")
+    async_session = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+
 # 데이터베이스 모델 베이스
 class Base(DeclarativeBase):
     pass
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """데이터베이스 세션 제공"""
-    # 동기 엔진에서 비동기 세션을 만들기 위해 임시로 async 엔진 생성
-    temp_async_engine = create_async_engine(settings.database_url, echo=settings.log_level == "DEBUG")
-    temp_async_session = async_sessionmaker(temp_async_engine, class_=AsyncSession, expire_on_commit=False)
+    if settings.database_url.startswith("sqlite"):
+        # SQLite의 경우 동기 세션 반환 (async generator지만 동기 세션을 yield)
+        from sqlalchemy.orm import sessionmaker
+        engine = create_engine(settings.database_url, echo=settings.log_level == "DEBUG")
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-    async with temp_async_session() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
-            await temp_async_engine.dispose()
+        with SessionLocal() as session:
+            try:
+                yield session
+            finally:
+                session.close()
+    else:
+        # PostgreSQL 등 async 지원 DB의 경우
+        if async_session is None:
+            raise ValueError("Async session not initialized for non-SQLite database")
+
+        async with async_session() as session:
+            try:
+                yield session
+            finally:
+                await session.close()
 
 
 # 공급사 테이블

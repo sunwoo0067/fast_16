@@ -1,6 +1,7 @@
 """헥사고날 아키텍처 통합 테스트"""
 import pytest
 import pytest_asyncio
+import asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from typing import AsyncGenerator
@@ -52,13 +53,17 @@ async def test_db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest.fixture
-def test_app(test_db_session):
+def test_app():
     """테스트용 FastAPI 애플리케이션"""
 
-    # 테스트용 get_db 오버라이드
+    # 테스트용 get_db 오버라이드 (동기 세션 사용)
     def override_get_db():
         try:
-            return test_db_session
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            engine = create_engine("sqlite:///./test_dropshipping.db", echo=False)
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            return SessionLocal()
         finally:
             pass
 
@@ -111,16 +116,31 @@ class TestHexagonalArchitectureIntegration:
         # 아직 실제 구현되지 않았으므로 500 또는 501 반환 예상
         assert response.status_code in [500, 501]
 
-    def test_database_integration(self, test_db_session):
+    def test_database_integration(self):
         """데이터베이스 통합 테스트"""
         from src.adapters.persistence.repositories import ItemRepository
+        from src.core.entities.item import Item, PricePolicy, ItemOption
+
+        # 동기 데이터베이스 세션 생성 (완전히 독립된 테스트 DB 사용)
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from src.adapters.persistence.models import Base
+        import tempfile
+        import os
+
+        # 완전히 독립된 임시 DB 파일 생성
+        import uuid
+        temp_db_name = f"test_{uuid.uuid4().hex}.db"
+        engine = create_engine(f"sqlite:///{temp_db_name}", echo=False)
+
+        # 테스트 데이터베이스에 테이블 생성
+        Base.metadata.create_all(bind=engine)
+
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        db_session = SessionLocal()
 
         # 리포지토리 인스턴스 생성
-        repository = ItemRepository(test_db_session)
-
-        # 상품 저장 테스트
-        from src.core.entities.item import Item, PricePolicy, ItemOption
-        from src.core.entities.account import TokenInfo
+        repository = ItemRepository(db_session)
 
         test_item = Item(
             id="test_item_001",
@@ -133,19 +153,31 @@ class TestHexagonalArchitectureIntegration:
             supplier_id="test_supplier"
         )
 
-        # 동기 함수 호출
-        import asyncio
-        asyncio.run(repository.save_item(test_item))
+        # 동기 함수 호출 (테스트 환경에서는 동기로 실행)
+        if hasattr(repository, 'save_item'):
+            if asyncio.iscoroutinefunction(repository.save_item):
+                asyncio.run(repository.save_item(test_item))
+            else:
+                repository.save_item(test_item)
 
         # 상품 조회 테스트
-        retrieved_item = asyncio.run(repository.get_item_by_id("test_item_001"))
+        if asyncio.iscoroutinefunction(repository.get_item_by_id):
+            retrieved_item = asyncio.run(repository.get_item_by_id("test_item_001"))
+        else:
+            retrieved_item = repository.get_item_by_id("test_item_001")
+
         assert retrieved_item is not None
         assert retrieved_item.title == "테스트 상품"
         assert retrieved_item.brand == "테스트 브랜드"
 
         # 해시 기반 중복 체크 테스트
-        duplicate_item = asyncio.run(repository.find_item_by_hash(test_item.hash_key))
+        if asyncio.iscoroutinefunction(repository.find_item_by_hash):
+            duplicate_item = asyncio.run(repository.find_item_by_hash(test_item.hash_key))
+        else:
+            duplicate_item = repository.find_item_by_hash(test_item.hash_key)
         assert duplicate_item is not None
+
+        db_session.close()
 
     def test_api_documentation(self, test_client):
         """API 문서 접근 테스트"""

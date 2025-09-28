@@ -33,7 +33,7 @@ class CollectOrdersUseCase:
         account_id: str,
         external_orders: List[Dict[str, Any]],
         max_concurrent: int = 3
-    ) -> Result[List[Dict[str, Any]], str]:
+    ):
         """외부몰 주문을 OwnerClan에 등록"""
         sync_history = SyncHistory(
             id=f"collect_orders_{supplier_id}_{self.clock.now().isoformat()}",

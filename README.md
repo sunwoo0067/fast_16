@@ -367,6 +367,15 @@ Content-Type: application/json
 }
 ```
 
+#### 5. WebSocket 실시간 모니터링
+```bash
+# 동기화 상태 모니터링
+ws://localhost:8000/ws/sync-status
+
+# 알림 수신
+ws://localhost:8000/ws/notifications
+```
+
 ### 5. 드랍십핑 자동화 (OwnerClan 연동)
 ```bash
 # 상품 동기화 실행
@@ -386,6 +395,42 @@ async def test():
 asyncio.run(test())
 "
 ```
+
+### 6. 프런트엔드 관리 인터페이스
+드랍십핑 자동화 시스템을 위한 React 기반 관리자 인터페이스가 제공됩니다.
+
+#### 개발 서버 실행
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+#### 주요 기능
+- **대시보드**: 실시간 통계 및 동기화 상태 모니터링
+- **상품 관리**: 상품 목록, 검색, 동기화 상태 관리
+- **주문 관리**: 주문 목록, 상태 변경, 배송 추적
+- **공급사 관리**: 공급사 계정 설정, 연결 테스트
+- **실시간 모니터링**: WebSocket 기반 동기화 상태 추적
+
+#### 기술 스택
+- **React 18** + **TypeScript** - 타입 안전성
+- **Vite** - 빠른 개발 서버
+- **Ant Design** - 일관된 UI 컴포넌트
+- **Zustand** - 상태 관리
+- **React Query** - 서버 상태 관리
+- **Axios** - HTTP 클라이언트
+
+#### 주요 컴포넌트
+- `Dashboard`: 실시간 통계 대시보드
+- `ProductList`: 상품 관리 테이블
+- `OrderList`: 주문 관리 테이블
+- `SupplierManager`: 공급사 관리 인터페이스
+
+#### API 연동
+- 자동으로 백엔드 API (`/api/v1/*`)와 연동
+- 에러 처리 및 로딩 상태 관리
+- 실시간 데이터 업데이트
 
 ### 에러 응답 형식
 ```json

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import logging
 
-from src.app.routes import health, items, products, suppliers, orders, order_collection
+from src.app.routes import health, items, products, suppliers, orders, order_collection, websocket
 from src.shared.config import get_settings
 from src.shared.logging import get_logger
 from src.adapters.persistence.models import get_db
@@ -58,6 +58,7 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["*"],  # 모든 헤더 노출
     )
 
     # API 라우터 등록
@@ -70,6 +71,9 @@ def create_app() -> FastAPI:
     api_router.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
     api_router.include_router(orders.router, prefix="/orders", tags=["orders"])
     api_router.include_router(order_collection.router, prefix="/order-collection", tags=["order-collection"])
+
+    # WebSocket 라우터 등록 (별도 마운트)
+    app.include_router(websocket.router)
 
     app.include_router(api_router)
 
