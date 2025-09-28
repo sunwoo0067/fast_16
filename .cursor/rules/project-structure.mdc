@@ -1,0 +1,165 @@
+---
+alwaysApply: true
+description: "드랍십핑 자동화 시스템의 프로젝트 구조 가이드"
+globs: "**/*"
+---
+
+# 프로젝트 구조 가이드
+
+드랍십핑 자동화 시스템은 **헥사고날 아키텍처(Hexagonal Architecture)**를 기반으로 구성되어 있습니다.
+
+## 📁 프로젝트 루트 구조
+
+```
+fast_16/
+├── src/                          # 소스 코드 (헥사고날 아키텍처)
+│   ├── app/                      # FastAPI 애플리케이션 (프레임 계층)
+│   │   ├── main.py              # FastAPI 앱 생성 및 설정
+│   │   ├── routes/              # HTTP 라우트 (DTO 변환만)
+│   │   ├── di.py                # 의존성 주입 설정
+│   │   └── middleware.py        # 미들웨어 (로깅, CORS 등)
+│   ├── core/                    # 도메인 (비즈니스 규칙)
+│   │   ├── entities/            # 순수 도메인 모델
+│   │   ├── usecases/            # 비즈니스 유즈케이스
+│   │   └── ports/               # 인터페이스 (추상화)
+│   ├── adapters/                # 어댑터 (외부 시스템 구현)
+│   │   ├── suppliers/           # OwnerClan, 도매매 등 공급사
+│   │   ├── markets/             # 쿠팡, 스마트스토어 등 마켓
+│   │   ├── persistence/         # 데이터베이스, 리포지토리
+│   │   └── auth/                # 토큰 저장소
+│   ├── presentation/            # DTO, 검증 스키마
+│   ├── services/                # 파사드 서비스 (트랜잭션 경계)
+│   └── shared/                  # 공유 설정, 로깅, 유틸리티
+├── frontend/                    # React TypeScript 프런트엔드
+├── scripts/                     # 개발/운영 스크립트
+├── docs/                        # 문서 및 데이터
+└── tests/                       # 테스트 코드
+```
+
+## 🏗️ 헥사고날 아키텍처 원칙
+
+### 1. 의존성 방향 (안쪽 → 바깥쪽)
+```
+프레임(app) → 도메인(core) → 어댑터(adapters)
+```
+
+- **app**: HTTP 요청/응답, DTO 변환만 담당
+- **core**: 비즈니스 로직, 도메인 규칙
+- **adapters**: 외부 시스템(DB, API, 파일 등) 연동
+
+### 2. 포트와 어댑터 패턴
+- **포트(Port)**: 인터페이스 정의 (`core/ports/`)
+- **어댑터(Adapter)**: 포트 구현체 (`adapters/`)
+
+### 3. 레이어 간 통신
+- 각 레이어는 자신의 책임만 수행
+- 상위 레이어는 하위 레이어를 의존성 주입으로 사용
+- 직접 의존성 주입은 `app/di.py`에서 관리
+
+## 📝 코딩 가이드라인
+
+### 1. 파일명 규칙
+- **엔티티**: `src/core/entities/{domain}_entity.py`
+- **유즈케이스**: `src/core/usecases/{action}_{domain}.py`
+- **포트**: `src/core/ports/{domain}_port.py`
+- **어댑터**: `src/adapters/{category}/{provider}_adapter.py`
+- **라우트**: `src/app/routes/{domain}.py`
+- **서비스**: `src/services/{domain}_service.py`
+
+### 2. 임포트 규칙
+```python
+# ✅ 올바른 임포트 (내부에서 외부로)
+from src.core.entities.item import Item
+from src.core.ports.supplier_port import SupplierPort
+from src.adapters.persistence.repositories import ItemRepository
+
+# ❌ 잘못된 임포트 (상위에서 하위로)
+from app.main import app  # app에서 core 임포트 금지
+```
+
+### 3. 에러 처리
+```python
+from src.shared.result import Result, Success, Failure
+
+# ✅ Result 패턴 사용
+def some_business_logic() -> Result[Item, str]:
+    try:
+        # 비즈니스 로직
+        return Success(item)
+    except Exception as e:
+        return Failure(f"오류: {str(e)}")
+```
+
+### 4. 로깅
+```python
+from src.shared.logging import get_logger
+
+logger = get_logger(__name__)
+
+# ✅ 구조화된 로깅
+logger.info("상품 동기화 시작", extra={"supplier_id": "123"})
+logger.error("API 호출 실패", extra={"error_code": 500, "url": "https://api.example.com"})
+```
+
+## 🔧 개발 워크플로우
+
+### 1. 새로운 기능 추가
+1. **도메인 모델** 정의 (`core/entities/`)
+2. **포트(인터페이스)** 정의 (`core/ports/`)
+3. **유즈케이스** 구현 (`core/usecases/`)
+4. **어댑터** 구현 (`adapters/`)
+5. **라우트** 추가 (`app/routes/`)
+6. **테스트** 작성
+
+### 2. API 엔드포인트 추가
+```python
+# app/routes/example.py
+@router.post("/items")
+async def create_item(request: ItemCreateRequest):
+    result = await item_service.create_item(request)
+    if result.is_success():
+        return ItemResponse(**result.get_value())
+    raise HTTPException(status_code=400, detail=result.get_error())
+```
+
+### 3. 데이터베이스 변경
+1. **모델 업데이트** (`adapters/persistence/models.py`)
+2. **마이그레이션 생성** (`alembic revision --autogenerate`)
+3. **마이그레이션 실행** (`alembic upgrade head`)
+
+## 🧪 테스트 가이드라인
+
+### 1. 단위 테스트
+```python
+# tests/unit/test_item_entity.py
+def test_item_creation():
+    item = Item(id="1", title="Test", price=PricePolicy(...))
+    assert item.is_available() == True
+```
+
+### 2. 통합 테스트
+```python
+# tests/integration/test_api.py
+async def test_product_sync_api():
+    response = await client.post("/api/v1/products/ingest", json={...})
+    assert response.status_code == 200
+```
+
+### 3. 테스트 실행
+```bash
+# 단위 테스트
+python -m pytest src/tests/unit/ -v
+
+# 통합 테스트
+python -m pytest src/tests/integration/ -v
+
+# 전체 테스트
+python -m pytest src/tests/ -v
+```
+
+## 📚 추가 리소스
+
+- **API 문서**: `http://localhost:8000/docs`
+- **README**: 프로젝트 개요 및 설치 가이드
+- **환경변수**: `.env.example` 파일 참고
+- **데이터베이스**: `alembic/` 폴더의 마이그레이션 파일들

@@ -1,0 +1,451 @@
+---
+alwaysApply: false
+description: "드랍십핑 자동화 시스템의 API 연동 가이드라인"
+globs: "src/adapters/**/*.py,src/services/**/*.py"
+---
+
+# API 연동 가이드라인
+
+드랍십핑 자동화 시스템은 **OwnerClan API**를 기반으로 하며, 다양한 외부 서비스와 연동합니다.
+
+## 🔗 OwnerClan API 연동
+
+### 인증 방식
+```python
+# src/adapters/suppliers/ownerclan_adapter.py
+from src.core.ports.supplier_port import SupplierCredentials
+
+async def authenticate(self, credentials: SupplierCredentials) -> str:
+    """JWT 토큰 발급"""
+    auth_data = {
+        "service": "ownerclan",
+        "userType": "seller",  # 판매사 계정
+        "username": credentials.username,
+        "password": credentials.password
+    }
+
+    response = await self.client.post(self.auth_url, json=auth_data)
+    token = response.text.strip()
+
+    if not token.startswith('eyJ'):
+        raise ValueError("Invalid JWT token")
+
+    return token
+```
+
+### GraphQL 쿼리 구조
+```python
+# 표준 GraphQL 쿼리 패턴
+query = """
+query GetAllItems($first: Int!, $after: String, $dateFrom: Int) {
+    allItems(first: $first, after: $after, dateFrom: $dateFrom) {
+        pageInfo {
+            hasNextPage
+            endCursor
+        }
+        edges {
+            node {
+                key
+                name
+                price
+                status
+                # 필요한 필드들...
+            }
+        }
+    }
+}
+"""
+
+variables = {
+    "first": 100,
+    "dateFrom": cutoff_timestamp
+}
+```
+
+## 📊 주요 API 엔드포인트
+
+### 상품 동기화 API
+```python
+# 상품 전체 조회 (페이징)
+async def fetch_all_items(supplier_id, account_id, first=100, after=None, date_from=None)
+
+# 상품 변경 이력 조회
+async def fetch_item_histories(supplier_id, account_id, first=100, date_from=None, kind=None)
+
+# 특정 조건 상품 조회
+async def fetch_items_by_price_range(supplier_id, account_id, min_price, max_price)
+async def fetch_items_by_category(supplier_id, account_id, category_key)
+async def fetch_items_by_vendor(supplier_id, account_id, vendor_code)
+```
+
+### 주문 관리 API
+```python
+# 주문 생성
+async def create_order(supplier_id, account_id, order_data)
+
+# 주문 조회
+async def fetch_orders(supplier_id, account_id, first=50, shipped_after=None, status=None)
+
+# 주문 취소
+async def cancel_order(supplier_id, account_id, order_key)
+```
+
+### 반품/교환 API
+```python
+# 반품/교환 요청
+async def request_refund_or_exchange(supplier_id, account_id, order_key, refund_data)
+```
+
+### 문의 관리 API
+```python
+# 1:1 문의 조회
+async def fetch_qna_articles(supplier_id, account_id, first=10, date_from=None)
+
+# 긴급 메시지 조회
+async def fetch_emergency_messages(supplier_id, account_id, first=5, status=None)
+```
+
+## 🔄 동기화 전략
+
+### 페이징 처리
+```python
+async def sync_all_items(supplier_id: str, account_id: str):
+    """페이징을 사용한 전체 상품 동기화"""
+    all_items = []
+    after_cursor = None
+
+    while True:
+        items, next_cursor = await adapter.fetch_all_items(
+            supplier_id=supplier_id,
+            account_id=account_id,
+            first=100,
+            after=after_cursor
+        )
+
+        all_items.extend(items)
+
+        if not next_cursor:
+            break
+        after_cursor = next_cursor
+
+    return all_items
+```
+
+### 증분 동기화
+```python
+async def sync_recent_changes(supplier_id: str, account_id: str, last_sync_time: int):
+    """최근 변경사항만 동기화"""
+    # 변경 이력 조회
+    histories = await adapter.fetch_item_histories(
+        supplier_id=supplier_id,
+        account_id=account_id,
+        date_from=last_sync_time,
+        kind="soldout"  # 품절 이력 우선
+    )
+
+    # 변경된 상품들만 상세 조회
+    changed_item_keys = list(set([h.item_key for h in histories]))
+
+    for item_key in changed_item_keys:
+        item = await adapter.fetch_item(item_key)
+        await repository.save_item(item)
+```
+
+### 크론 스케줄링
+```python
+# scripts/scheduler.py
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+async def schedule_sync_jobs():
+    """동기화 작업 스케줄링"""
+    scheduler = AsyncIOScheduler()
+
+    # 상품 동기화 (10분마다)
+    scheduler.add_job(
+        sync_all_products,
+        'interval',
+        minutes=10,
+        id='product_sync'
+    )
+
+    # 주문 동기화 (5분마다)
+    scheduler.add_job(
+        sync_recent_orders,
+        'interval',
+        minutes=5,
+        id='order_sync'
+    )
+
+    # 문의 모니터링 (15분마다)
+    scheduler.add_job(
+        monitor_inquiries,
+        'interval',
+        minutes=15,
+        id='inquiry_monitor'
+    )
+
+    scheduler.start()
+```
+
+## 🚨 에러 처리 및 재시도
+
+### 표준 에러 처리
+```python
+from src.shared.result import Result, Success, Failure
+
+async def safe_api_call(api_function, *args, **kwargs):
+    """안전한 API 호출"""
+    try:
+        result = await api_function(*args, **kwargs)
+        return Success(result)
+    except httpx.TimeoutException:
+        return Failure("API 타임아웃")
+    except httpx.HTTPStatusError as e:
+        return Failure(f"HTTP {e.response.status_code}: {e.response.text}")
+    except Exception as e:
+        return Failure(f"예상치 못한 오류: {str(e)}")
+```
+
+### 지수 백오프 재시도
+```python
+import asyncio
+import random
+
+async def retry_with_backoff(
+    func,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 60.0
+):
+    """지수 백오프를 사용한 재시도"""
+    for attempt in range(max_retries):
+        result = await func()
+
+        if result.is_success():
+            return result
+
+        if attempt == max_retries - 1:
+            return result  # 마지막 시도
+
+        # 지수 백오프: 1초, 2초, 4초, 8초...
+        delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+        await asyncio.sleep(delay)
+
+    return Failure("최대 재시도 횟수 초과")
+```
+
+## 📝 API 응답 매핑
+
+### OwnerClan 응답 → 도메인 엔티티
+```python
+def map_ownerclan_to_domain(ownerclan_item):
+    """OwnerClan 상품을 도메인 엔티티로 변환"""
+    return Item(
+        id=ownerclan_item.key,
+        title=ownerclan_item.name,
+        brand=ownerclan_item.origin,
+        price=PricePolicy(
+            original_price=ownerclan_item.price,
+            margin_rate=0.3  # 기본 마진율
+        ),
+        options=[
+            ItemOption(
+                name=opt.get("optionAttributes", [{}])[0].get("name", ""),
+                value=opt.get("optionAttributes", [{}])[0].get("value", ""),
+                price_adjustment=opt.get("price", 0),
+                stock_quantity=opt.get("quantity", 0)
+            )
+            for opt in ownerclan_item.options
+        ],
+        images=[img.get("url") if isinstance(img, dict) else img
+               for img in ownerclan_item.images],
+        category_id=ownerclan_item.category.get("key") if ownerclan_item.category else "",
+        supplier_id=supplier_id,
+        is_active=ownerclan_item.status == "active"
+    )
+```
+
+## 🔐 인증 토큰 관리
+
+### 토큰 저장 및 갱신
+```python
+# src/adapters/auth/token_store.py
+class TokenStore:
+    """토큰 저장 및 자동 갱신"""
+
+    async def get_valid_token(self, account: Account) -> Optional[str]:
+        """유효한 토큰 조회 (만료 시 자동 갱신)"""
+        if account.token_info and not account.token_info.is_expired():
+            return account.token_info.access_token
+
+        # 토큰 갱신
+        new_token = await self.refresh_token(account)
+        if new_token:
+            await self.save_token(account, new_token)
+            return new_token.access_token
+
+        return None
+
+    async def refresh_token(self, account: Account) -> Optional[TokenInfo]:
+        """토큰 갱신 (T-3일 전에 자동 갱신)"""
+        # OwnerClan 인증 로직
+        token = await ownerclan_adapter.authenticate(
+            SupplierCredentials(
+                supplier_id=account.supplier_id,
+                account_id=account.account_name,
+                username=account.username,
+                password=account.password_encrypted
+            )
+        )
+
+        return TokenInfo(access_token=token)
+```
+
+## 📊 모니터링 및 로깅
+
+### API 호출 로깅
+```python
+from src.shared.logging import get_logger
+
+logger = get_logger(__name__)
+
+async def log_api_call(endpoint: str, method: str, status_code: int, duration: float):
+    """API 호출 로깅"""
+    logger.info(
+        f"API 호출: {method} {endpoint}",
+        extra={
+            "endpoint": endpoint,
+            "method": method,
+            "status_code": status_code,
+            "duration_ms": duration * 1000,
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+```
+
+### 성능 모니터링
+```python
+async def monitor_api_performance():
+    """API 성능 모니터링"""
+    metrics = {
+        "total_requests": 0,
+        "successful_requests": 0,
+        "failed_requests": 0,
+        "average_response_time": 0.0,
+        "requests_per_minute": 0
+    }
+
+    # 주기적으로 메트릭 수집 및 저장
+    while True:
+        await asyncio.sleep(60)  # 1분마다
+        # 메트릭 계산 및 저장
+        pass
+```
+
+## 🔧 환경 설정
+
+### OwnerClan API 설정
+```bash
+# .env 파일
+OWNERCLAN_USERNAME=your_ownerclan_id
+OWNERCLAN_PASSWORD=your_ownerclan_password
+OWNERCLAN_SUPPLIER_ID=your_supplier_id
+OWNERCLAN_API_URL=https://api-sandbox.ownerclan.com/v1/graphql
+OWNERCLAN_AUTH_URL=https://auth.ownerclan.com/auth
+```
+
+### Rate Limit 및 타임아웃
+```python
+# src/adapters/suppliers/ownerclan_adapter.py
+def __init__(self, rate_limit_per_minute: int = 100, timeout: int = 30):
+    self.rate_limit = rate_limit_per_minute
+    self.timeout = timeout
+    self.client = httpx.AsyncClient(timeout=timeout)
+```
+
+## 📈 최적화 전략
+
+### 배치 처리
+```python
+async def batch_process_items(items: List[Item], batch_size: int = 50):
+    """배치 처리로 메모리 및 API 효율성 향상"""
+    for i in range(0, len(items), batch_size):
+        batch = items[i:i + batch_size]
+        await process_batch(batch)
+        await asyncio.sleep(0.1)  # API Rate Limit 준수
+```
+
+### 캐싱 전략
+```python
+from functools import lru_cache
+
+@lru_cache(maxsize=1000)
+async def get_cached_item(item_key: str) -> Optional[Item]:
+    """상품 정보 캐싱"""
+    return await repository.get_item_by_id(item_key)
+```
+
+## 🧪 테스트 가이드라인
+
+### API 어댑터 테스트
+```python
+# tests/unit/test_ownerclan_adapter.py
+async def test_fetch_all_items_pagination():
+    """페이징 기능 테스트"""
+    items, next_cursor = await adapter.fetch_all_items(
+        supplier_id="test",
+        account_id="test",
+        first=10
+    )
+
+    assert len(items) <= 10
+    assert isinstance(next_cursor, str) or next_cursor is None
+```
+
+### 통합 테스트
+```python
+# tests/integration/test_api_integration.py
+async def test_end_to_end_sync():
+    """종단간 동기화 테스트"""
+    # 1. 상품 수집
+    items = await sync_recent_products()
+
+    # 2. 데이터베이스 저장 확인
+    for item in items:
+        saved_item = await repository.get_item_by_id(item.id)
+        assert saved_item is not None
+
+    # 3. 동기화 이력 확인
+    sync_history = await repository.get_sync_history(sync_type="ingest")
+    assert len(sync_history) > 0
+```
+
+## 🚀 배포 고려사항
+
+### 환경별 설정
+```python
+# settings.py
+class Settings(BaseSettings):
+    ownerclan_api_url: str = Field(
+        default="https://api-sandbox.ownerclan.com/v1/graphql",
+        env="OWNERCLAN_API_URL"
+    )
+
+    # Production 환경에서는 실제 API 사용
+    if os.getenv("ENVIRONMENT") == "production":
+        ownerclan_api_url = "https://api.ownerclan.com/v1/graphql"
+```
+
+### 모니터링 및 알림
+```python
+# src/services/monitoring_service.py
+async def send_sync_notification(status: str, message: str):
+    """동기화 상태 알림"""
+    if status == "success":
+        await slack_bot.send_success_notification(message)
+    elif status == "error":
+        await slack_bot.send_error_notification(message)
+        await email_service.send_alert(message)
+```
+
+이 가이드라인을 따라 OwnerClan API와의 안정적이고 효율적인 연동을 구현하세요.

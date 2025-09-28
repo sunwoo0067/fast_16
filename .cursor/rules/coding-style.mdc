@@ -1,0 +1,565 @@
+---
+alwaysApply: false
+description: "드랍십핑 자동화 시스템의 코딩 스타일 가이드라인"
+globs: "src/**/*.py,frontend/src/**/*.{ts,tsx}"
+---
+
+# 코딩 스타일 가이드라인
+
+드랍십핑 자동화 시스템의 일관된 코드 품질을 유지하기 위한 가이드라인입니다.
+
+## 🐍 Python 코딩 스타일
+
+### 1. 기본 규칙
+```python
+# ✅ 좋은 예시
+from typing import List, Optional, Dict, Any
+from datetime import datetime
+
+class ExampleClass:
+    """클래스 설명은 독스트링으로 작성"""
+
+    def __init__(self, param1: str, param2: Optional[int] = None) -> None:
+        """생성자 설명"""
+        self.param1 = param1
+        self.param2 = param2
+
+    async def process_data(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """데이터 처리 메서드"""
+        result = {}
+
+        for item in data:
+            # 비즈니스 로직
+            processed = await self._process_item(item)
+            result[item['id']] = processed
+
+        return result
+
+    async def _process_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        """개별 아이템 처리 (private 메서드)"""
+        return {
+            'id': item['id'],
+            'processed': True,
+            'timestamp': datetime.now().isoformat()
+        }
+
+# ❌ 나쁜 예시
+# import *
+# class bad:
+#     def bad_method(self, x): pass
+#     async def process(self): pass
+```
+
+### 2. 변수 및 함수 명명
+```python
+# ✅ 좋은 예시
+class ProductService:
+    def __init__(self, repository: ProductRepository) -> None:
+        self.repository = repository
+        self.max_retry_count = 3
+        self.timeout_seconds = 30
+
+    async def get_product_by_id(self, product_id: str) -> Optional[Product]:
+        """상품 ID로 조회"""
+        return await self.repository.find_by_id(product_id)
+
+    async def sync_product_data(self, supplier_id: str) -> Result[List[Product], str]:
+        """상품 데이터 동기화"""
+        return await self._sync_from_supplier(supplier_id)
+
+# ❌ 나쁜 예시
+class ps:
+    def __init__(self, r):
+        self.r = r
+        self.mrc = 3
+        self.ts = 30
+
+    def gpbi(self, pid):
+        return self.r.fbi(pid)
+
+    def spd(self, sid):
+        return self._sfs(sid)
+```
+
+### 3. 에러 처리
+```python
+# ✅ 좋은 예시
+from src.shared.result import Result, Success, Failure
+
+async def safe_operation() -> Result[Data, str]:
+    try:
+        # 위험한 작업
+        result = await risky_api_call()
+        return Success(result)
+    except ValueError as e:
+        return Failure(f"유효성 검사 실패: {str(e)}")
+    except ConnectionError as e:
+        return Failure(f"연결 실패: {str(e)}")
+    except Exception as e:
+        logger.error(f"예상치 못한 오류: {e}", exc_info=True)
+        return Failure("시스템 오류가 발생했습니다")
+
+# ❌ 나쁜 예시
+async def unsafe_operation():
+    try:
+        result = await risky_api_call()
+        return result
+    except:
+        return None  # 에러 정보 유실
+```
+
+### 4. 비동기/동기 함수 사용
+```python
+# ✅ 좋은 예시
+class DataProcessor:
+    async def process_batch(self, items: List[Item]) -> List[ProcessedItem]:
+        """배치 처리 (CPU 집약적 작업)"""
+        semaphore = asyncio.Semaphore(10)  # 동시성 제어
+
+        async def process_single(item: Item) -> ProcessedItem:
+            async with semaphore:
+                return await self._heavy_computation(item)
+
+        # 병렬 처리
+        tasks = [process_single(item) for item in items]
+        return await asyncio.gather(*tasks)
+
+    async def _heavy_computation(self, item: Item) -> ProcessedItem:
+        """무거운 계산 작업"""
+        await asyncio.sleep(0.1)  # I/O 시뮬레이션
+        return ProcessedItem(id=item.id, processed=True)
+
+# ❌ 나쁜 예시
+async def bad_process():
+    for item in items:
+        # 동기 함수를 async에서 직접 호출 (블록킹)
+        result = sync_function(item)  # ❌ 이벤트 루프 블록킹
+        results.append(result)
+```
+
+### 5. 데이터베이스 쿼리
+```python
+# ✅ 좋은 예시
+from sqlalchemy import select, and_, or_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+class ProductRepository:
+    async def find_by_supplier_and_category(
+        self,
+        db: AsyncSession,
+        supplier_id: str,
+        category_id: str
+    ) -> List[Product]:
+        """공급사와 카테고리로 상품 조회"""
+        stmt = select(Product).where(
+            and_(
+                Product.supplier_id == supplier_id,
+                Product.category_id == category_id,
+                Product.is_active == True
+            )
+        ).order_by(Product.created_at.desc())
+
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
+# ❌ 나쁜 예시
+async def bad_query(db):
+    # 문자열로 직접 쿼리 (SQL 인젝션 위험)
+    query = f"SELECT * FROM products WHERE supplier_id = '{supplier_id}'"
+    return await db.execute(query)
+```
+
+## ⚛️ TypeScript/React 코딩 스타일
+
+### 1. 컴포넌트 구조
+```typescript
+// ✅ 좋은 예시
+import React, { useState, useEffect, useCallback } from 'react';
+import { Card, Button, Table, Modal, Form } from 'antd';
+import { useProductsStore } from '@/stores/products';
+
+interface ProductListProps {
+  onEdit?: (product: Product) => void;
+  onDelete?: (productId: string) => void;
+}
+
+const ProductList: React.FC<ProductListProps> = ({ onEdit, onDelete }) => {
+  const { products, loading, error, fetchProducts, deleteProduct } = useProductsStore();
+
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+
+  const handleDelete = useCallback(async () => {
+    try {
+      await deleteProduct(selectedRowKeys[0] as string);
+      setDeleteModalVisible(false);
+      message.success('상품이 삭제되었습니다.');
+    } catch (error) {
+      message.error('삭제 중 오류가 발생했습니다.');
+    }
+  }, [selectedRowKeys, deleteProduct]);
+
+  useEffect(() => {
+    fetchProducts();
+  }, [fetchProducts]);
+
+  const columns = [
+    {
+      title: '상품명',
+      dataIndex: 'title',
+      key: 'title',
+      ellipsis: true,
+    },
+    // ... 다른 컬럼들
+  ];
+
+  return (
+    <div>
+      <Card title="상품 목록" extra={<Button type="primary">추가</Button>}>
+        <Table
+          columns={columns}
+          dataSource={products}
+          loading={loading}
+          rowKey="id"
+          rowSelection={{
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+          }}
+        />
+      </Card>
+
+      <Modal
+        title="삭제 확인"
+        open={deleteModalVisible}
+        onCancel={() => setDeleteModalVisible(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setDeleteModalVisible(false)}>
+            취소
+          </Button>,
+          <Button key="delete" type="primary" danger onClick={handleDelete}>
+            삭제
+          </Button>,
+        ]}
+      >
+        선택된 상품을 삭제하시겠습니까?
+      </Modal>
+    </div>
+  );
+};
+
+export default ProductList;
+```
+
+### 2. 상태 관리 (Zustand)
+```typescript
+// ✅ 좋은 예시
+interface ProductsState {
+  products: Product[];
+  loading: boolean;
+  error: string | null;
+  filters: ProductFilters;
+
+  fetchProducts: (filters?: ProductFilters) => Promise<void>;
+  createProduct: (product: ProductCreateRequest) => Promise<void>;
+  updateProduct: (id: string, product: ProductUpdateRequest) => Promise<void>;
+  deleteProduct: (id: string) => Promise<void>;
+  setFilters: (filters: Partial<ProductFilters>) => void;
+  clearError: () => void;
+}
+
+export const useProductsStore = create<ProductsState>()(
+  devtools(
+    (set, get) => ({
+      products: [],
+      loading: false,
+      error: null,
+      filters: {},
+
+      fetchProducts: async (filters = {}) => {
+        set({ loading: true, error: null });
+
+        try {
+          const response = await apiClient.getProducts(filters);
+          set({
+            products: response.items,
+            loading: false
+          });
+        } catch (error) {
+          set({
+            error: '상품 목록을 불러오는데 실패했습니다.',
+            loading: false
+          });
+        }
+      },
+
+      // ... 다른 액션들
+    }),
+    { name: 'products-store' }
+  )
+);
+```
+
+### 3. API 클라이언트
+```typescript
+// ✅ 좋은 예시
+import axios, { AxiosResponse } from 'axios';
+
+class ApiClient {
+  private client = axios.create({
+    baseURL: '/api/v1',
+    timeout: 30000,
+  });
+
+  constructor() {
+    // 응답 인터셉터
+    this.client.interceptors.response.use(
+      (response: AxiosResponse) => response,
+      (error) => {
+        if (error.response?.status === 401) {
+          // 인증 만료 처리
+          window.location.href = '/login';
+        }
+        return Promise.reject(error);
+      }
+    );
+  }
+
+  async getProducts(params?: ProductFilters): Promise<ProductListResponse> {
+    const response = await this.client.get('/products', { params });
+    return response.data;
+  }
+
+  async createProduct(product: ProductCreateRequest): Promise<Product> {
+    const response = await this.client.post('/products', product);
+    return response.data;
+  }
+}
+
+// ❌ 나쁜 예시
+class BadApiClient {
+  async getData() {
+    // 직접 fetch 사용, 에러 처리 없음
+    const response = await fetch('/api/data');
+    return response.json();
+  }
+}
+```
+
+### 4. 타입 정의
+```typescript
+// ✅ 좋은 예시
+// types/index.ts
+export interface Product {
+  id: string;
+  title: string;
+  price: number;
+  category: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductFilters {
+  category?: string;
+  min_price?: number;
+  max_price?: number;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ApiResponse<T = any> {
+  success: boolean;
+  message: string;
+  data?: T;
+  timestamp: string;
+}
+
+// ❌ 나쁜 예시
+interface Product {
+  id: string;
+  title: string;
+  price: number;
+  // 타입 정의 불완전
+}
+
+type Filters = {
+  category?: string;
+  // 선택적 필드들이 any 타입
+}
+```
+
+## 🧪 테스트 작성 가이드
+
+### 1. 단위 테스트
+```python
+# tests/unit/test_product_service.py
+import pytest
+from unittest.mock import Mock, AsyncMock
+
+class TestProductService:
+    @pytest.fixture
+    def mock_repository(self):
+        return Mock()
+
+    @pytest.fixture
+    def product_service(self, mock_repository):
+        return ProductService(repository=mock_repository)
+
+    async def test_get_product_success(self, product_service, mock_repository):
+        """상품 조회 성공 테스트"""
+        # Given
+        mock_repository.get_by_id = AsyncMock(return_value=Product(id="1", title="Test"))
+
+        # When
+        result = await product_service.get_product("1")
+
+        # Then
+        assert result.is_success()
+        assert result.get_value().title == "Test"
+        mock_repository.get_by_id.assert_called_once_with("1")
+```
+
+### 2. 통합 테스트
+```python
+# tests/integration/test_api_endpoints.py
+import pytest
+from fastapi.testclient import TestClient
+
+class TestProductAPI:
+    def test_create_product(self, client: TestClient):
+        """상품 생성 API 테스트"""
+        # Given
+        product_data = {
+            "title": "테스트 상품",
+            "price": 10000,
+            "category": "electronics"
+        }
+
+        # When
+        response = client.post("/api/v1/products", json=product_data)
+
+        # Then
+        assert response.status_code == 201
+        data = response.json()
+        assert data["title"] == "테스트 상품"
+        assert "id" in data
+```
+
+## 📝 커밋 메시지 가이드
+
+### 커밋 메시지 형식
+```bash
+type(scope): description
+
+[optional body]
+
+[optional footer]
+```
+
+### Type 종류
+- **feat**: 새로운 기능
+- **fix**: 버그 수정
+- **docs**: 문서 변경
+- **style**: 코드 스타일 변경 (포맷팅 등)
+- **refactor**: 리팩토링
+- **test**: 테스트 코드
+- **chore**: 빌드, 설정 변경
+
+### 예시
+```bash
+feat(api): Add product synchronization endpoint
+
+- Implement OwnerClan API integration for product sync
+- Add pagination support for large datasets
+- Include error handling and retry logic
+
+Closes #123
+```
+
+## 🔧 코드 품질 도구
+
+### ESLint (TypeScript)
+```bash
+cd frontend
+npm run lint        # 린팅 실행
+npm run lint:fix   # 자동 수정
+```
+
+### Prettier (코드 포맷팅)
+```bash
+cd frontend
+npm run format      # 코드 포맷팅
+```
+
+### Black (Python 포맷팅)
+```bash
+black src/          # Python 코드 포맷팅
+black --check src/  # 포맷팅 확인
+```
+
+### MyPy (Python 타입 체크)
+```bash
+mypy src/           # 타입 체크
+```
+
+## 🚀 성능 최적화 가이드
+
+### 1. 데이터베이스 쿼리 최적화
+```python
+# ✅ 좋은 예시 - 인덱스 활용
+async def find_active_products_by_supplier(self, supplier_id: str) -> List[Product]:
+    stmt = select(Product).where(
+        and_(
+            Product.supplier_id == supplier_id,
+            Product.is_active == True
+        )
+    ).options(selectinload(Product.category))
+
+    return await self.db.execute(stmt)
+
+# ❌ 나쁜 예시 - N+1 쿼리
+async def bad_find_products(self, supplier_id: str) -> List[Product]:
+    products = await self.get_products_by_supplier(supplier_id)
+    for product in products:
+        # 각 상품마다 카테고리 조회 (N+1 문제)
+        category = await self.get_category(product.category_id)
+```
+
+### 2. 캐싱 전략
+```python
+from functools import lru_cache
+
+@lru_cache(maxsize=1000)
+async def get_cached_product(product_id: str) -> Optional[Product]:
+    """상품 정보 캐싱"""
+    return await repository.get_product_by_id(product_id)
+```
+
+### 3. 비동기 처리 최적화
+```python
+# ✅ 좋은 예시 - 병렬 처리
+async def process_multiple_suppliers(self, supplier_ids: List[str]) -> Dict[str, List[Product]]:
+    """여러 공급사의 상품을 병렬로 처리"""
+    semaphore = asyncio.Semaphore(5)  # 동시성 제어
+
+    async def process_supplier(supplier_id: str) -> Tuple[str, List[Product]]:
+        async with semaphore:
+            products = await self.sync_supplier_products(supplier_id)
+            return supplier_id, products
+
+    # 모든 공급사를 병렬로 처리
+    tasks = [process_supplier(sid) for sid in supplier_ids]
+    results = await asyncio.gather(*tasks)
+
+    return dict(results)
+
+# ❌ 나쁜 예시 - 순차 처리
+async def bad_process_suppliers(self, supplier_ids: List[str]):
+    results = {}
+    for supplier_id in supplier_ids:
+        # 순차적으로 처리 (느림)
+        products = await self.sync_supplier_products(supplier_id)
+        results[supplier_id] = products
+```
+
+이 가이드라인을 따라 일관된 코드 스타일과 품질을 유지하세요.

@@ -1,0 +1,647 @@
+---
+alwaysApply: false
+description: "드랍십핑 자동화 시스템의 데이터베이스 사용 가이드라인"
+globs: "src/adapters/persistence/**/*.py,src/services/**/*.py"
+---
+
+# 데이터베이스 사용 가이드라인
+
+드랍십핑 자동화 시스템은 **SQLAlchemy ORM**과 **Alembic 마이그레이션**을 사용하여 데이터베이스를 관리합니다.
+
+## 🗄️ 데이터베이스 구조
+
+### 테이블 설계 원칙
+```python
+# src/adapters/persistence/models.py
+class Product(Base):
+    """헥사고날 아키텍처의 상품 테이블"""
+    __tablename__ = "products"
+
+    # 기본 키 (UUID 기반)
+    id = Column(String, primary_key=True, index=True)
+
+    # 외래 키 관계
+    supplier_id = Column(String, index=True, nullable=False)
+
+    # 비즈니스 데이터
+    title = Column(String, nullable=False)
+    price_data = Column(Text, nullable=False)  # JSON 형태 가격 정보
+    options = Column(Text)  # JSON 형태 옵션 정보
+    images = Column(Text)   # JSON 형태 이미지 정보
+
+    # 상태 및 동기화 정보
+    is_active = Column(Boolean, default=True)
+    sync_status = Column(String, default="pending")
+    last_synced_at = Column(DateTime(timezone=True))
+
+    # 해시 기반 중복 검증
+    hash_key = Column(String, index=True)
+
+    # 감사 필드
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # 성능 최적화 인덱스
+    __table_args__ = (
+        Index('ix_products_supplier_active', 'supplier_id', 'is_active'),
+        Index('ix_products_hash_key', 'hash_key'),
+        Index('ix_products_last_synced', 'last_synced_at'),
+    )
+```
+
+### 인덱스 설계 전략
+```python
+# 복합 인덱스 예시
+__table_args__ = (
+    Index('ix_products_supplier_category', 'supplier_id', 'category_id'),
+    Index('ix_products_sync_status', 'sync_status', 'last_synced_at'),
+    Index('ix_orders_supplier_status', 'supplier_id', 'status'),
+)
+```
+
+## 🔍 쿼리 작성 가이드
+
+### 기본 쿼리 패턴
+```python
+from sqlalchemy import select, and_, or_, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+
+class ProductRepository:
+    async def find_by_supplier(self, db: AsyncSession, supplier_id: str) -> List[Product]:
+        """공급사별 상품 조회"""
+        stmt = select(Product).where(
+            Product.supplier_id == supplier_id,
+            Product.is_active == True
+        ).order_by(desc(Product.created_at))
+
+        result = await db.execute(stmt)
+        return result.scalars().all()
+
+    async def find_by_price_range(self, db: AsyncSession, min_price: int, max_price: int) -> List[Product]:
+        """가격 범위로 상품 조회"""
+        stmt = select(Product).where(
+            and_(
+                Product.price_data.contains(f'"original_price": {min_price}'),  # JSON 필드 검색
+                Product.is_active == True
+            )
+        )
+
+        result = await db.execute(stmt)
+        return result.scalars().all()
+```
+
+### JSON 필드 쿼리
+```python
+# JSON 필드에서 특정 값 추출
+from sqlalchemy import text
+
+async def find_products_by_margin_rate(self, db: AsyncSession, min_margin: float) -> List[Product]:
+    """마진율 범위로 상품 조회"""
+    stmt = select(Product).where(
+        text("CAST(SUBSTRING(price_data, 'margin_rate.: ([0-9.]+)') AS FLOAT) >= :min_margin")
+    ).params(min_margin=min_margin)
+
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+# JSONB contains 연산자 사용
+async def find_products_with_options(self, db: AsyncSession) -> List[Product]:
+    """옵션이 있는 상품 조회"""
+    stmt = select(Product).where(
+        Product.options.isnot(None)  # JSON 필드가 NULL이 아님
+    )
+
+    result = await db.execute(stmt)
+    return result.scalars().all()
+```
+
+### 페이지네이션
+```python
+async def find_products_paginated(
+    self,
+    db: AsyncSession,
+    page: int = 1,
+    page_size: int = 20,
+    supplier_id: Optional[str] = None
+) -> Tuple[List[Product], int]:
+    """페이징을 사용한 상품 조회"""
+    # 기본 쿼리
+    stmt = select(Product).where(Product.is_active == True)
+
+    if supplier_id:
+        stmt = stmt.where(Product.supplier_id == supplier_id)
+
+    # 전체 개수 조회
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar()
+
+    # 페이징 적용
+    offset = (page - 1) * page_size
+    stmt = stmt.order_by(desc(Product.created_at)).offset(offset).limit(page_size)
+
+    result = await db.execute(stmt)
+    products = result.scalars().all()
+
+    return products, total
+```
+
+## 💾 데이터 저장 및 업데이트
+
+### 벌크 작업
+```python
+async def bulk_save_products(self, db: AsyncSession, products: List[Product]) -> None:
+    """상품 대량 저장"""
+    for product in products:
+        # 중복 체크
+        existing = await db.get(Product, product.id)
+        if existing:
+            # 업데이트
+            for key, value in product.__dict__.items():
+                if not key.startswith('_'):
+                    setattr(existing, key, value)
+        else:
+            # 생성
+            db.add(Product(**product.__dict__))
+
+    await db.commit()
+
+async def bulk_update_sync_status(
+    self,
+    db: AsyncSession,
+    product_ids: List[str],
+    status: str
+) -> None:
+    """여러 상품의 동기화 상태 업데이트"""
+    from sqlalchemy import update
+
+    stmt = update(Product).where(
+        Product.id.in_(product_ids)
+    ).values(
+        sync_status=status,
+        last_synced_at=datetime.now()
+    )
+
+    await db.execute(stmt)
+    await db.commit()
+```
+
+### 트랜잭션 관리
+```python
+async def sync_products_with_transaction(
+    self,
+    db: AsyncSession,
+    products: List[Product]
+) -> Result[bool, str]:
+    """트랜잭션을 사용한 상품 동기화"""
+    try:
+        # 트랜잭션 시작
+        for product in products:
+            # 상품 저장
+            await self.save_product(db, product)
+
+            # 동기화 이력 저장
+            await self.save_sync_history(db, product.id, "success")
+
+        await db.commit()
+        return Success(True)
+
+    except Exception as e:
+        await db.rollback()
+        return Failure(f"동기화 실패: {str(e)}")
+```
+
+## 🔄 마이그레이션 관리
+
+### 마이그레이션 파일 구조
+```python
+# alembic/versions/xxx_description.py
+"""마이그레이션 설명
+
+Revision ID: xxx
+Revises: 이전_리비전_ID
+Create Date: 2025-01-01 00:00:00.000000
+
+"""
+from alembic import op
+import sqlalchemy as sa
+
+# revision identifiers, used by Alembic.
+revision = 'xxx'
+down_revision = '이전_리비전_ID'
+branch_labels = None
+depends_on = None
+
+def upgrade() -> None:
+    """테이블 생성 또는 수정"""
+    op.create_table('new_table',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('name', sa.String(), nullable=False),
+        sa.PrimaryKeyConstraint('id')
+    )
+
+def downgrade() -> None:
+    """롤백 시 실행"""
+    op.drop_table('new_table')
+```
+
+### 마이그레이션 실행
+```bash
+# 새로운 마이그레이션 생성
+alembic revision --autogenerate -m "새로운 기능 추가"
+
+# 마이그레이션 적용
+alembic upgrade head
+
+# 특정 리비전으로 롤백
+alembic downgrade -1
+
+# 현재 상태 확인
+alembic current
+alembic history
+```
+
+## 🏗️ 모델 설계 원칙
+
+### 도메인 주도 설계 (DDD)
+```python
+# ✅ 좋은 예시 - 도메인 로직 포함
+class Product(Base):
+    """상품 도메인 모델"""
+
+    def is_available(self) -> bool:
+        """상품 구매 가능 여부"""
+        return (
+            self.is_active and
+            self.stock_quantity > 0 and
+            self.sync_status == "synced"
+        )
+
+    def get_display_price(self) -> int:
+        """표시 가격 계산"""
+        return self.price_data.get("final_price", 0)
+
+    def update_stock(self, quantity: int) -> None:
+        """재고 업데이트"""
+        self.stock_quantity = max(0, self.stock_quantity + quantity)
+        self.updated_at = datetime.now()
+
+# ❌ 나쁜 예시 - 순수 데이터 모델
+class BadProduct(Base):
+    """단순 데이터 모델"""
+    # 비즈니스 로직 없음
+    pass
+```
+
+### JSON 필드 사용
+```python
+# ✅ 좋은 예시 - JSON 필드로 유연성 확보
+class Product(Base):
+    price_data = Column(Text)  # JSON: {"original": 10000, "sale": 8000, "margin": 0.3}
+    options = Column(Text)      # JSON: [{"name": "색상", "value": "빨강", "price": 1000}]
+    images = Column(Text)       # JSON: ["image1.jpg", "image2.jpg"]
+
+# ❌ 나쁜 예시 - 과도한 정규화
+class BadProduct(Base):
+    price_original = Column(Integer)
+    price_sale = Column(Integer)
+    price_margin = Column(Float)
+    # 옵션별 개별 테이블 (관계 복잡도 증가)
+```
+
+## 🔍 성능 최적화
+
+### 쿼리 최적화
+```python
+# ✅ 좋은 예시 - 필요한 필드만 선택
+async def get_product_titles(self, db: AsyncSession, supplier_id: str) -> List[str]:
+    stmt = select(Product.title).where(
+        Product.supplier_id == supplier_id,
+        Product.is_active == True
+    )
+    result = await db.execute(stmt)
+    return [row[0] for row in result]
+
+# ❌ 나쁜 예시 - 불필요한 데이터 로드
+async def bad_get_products(self, db: AsyncSession, supplier_id: str):
+    stmt = select(Product)  # 모든 필드 로드
+    result = await db.execute(stmt)
+    products = result.scalars().all()
+
+    # 실제로는 title만 필요한데 모든 필드 로드
+    return [p.title for p in products]
+```
+
+### 지연 로딩 관리
+```python
+from sqlalchemy.orm import selectinload
+
+# ✅ 좋은 예시 - 필요한 관계만 로드
+async def get_products_with_category(self, db: AsyncSession) -> List[Product]:
+    stmt = select(Product).options(
+        selectinload(Product.category)  # 카테고리만 미리 로드
+    ).where(Product.is_active == True)
+
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+# ❌ 나쁜 예시 - 불필요한 관계 로드
+async def bad_get_products(self, db: AsyncSession):
+    stmt = select(Product).options(
+        selectinload(Product.category),
+        selectinload(Product.supplier),
+        selectinload(Product.sync_history)  # 불필요한 관계들
+    )
+```
+
+### 배치 처리
+```python
+# ✅ 좋은 예시 - 배치 처리
+async def bulk_update_products(self, db: AsyncSession, updates: List[Dict]) -> None:
+    """상품 정보 대량 업데이트"""
+    batch_size = 100
+
+    for i in range(0, len(updates), batch_size):
+        batch = updates[i:i + batch_size]
+
+        # 배치 단위로 업데이트
+        for update_data in batch:
+            stmt = update(Product).where(
+                Product.id == update_data['id']
+            ).values(**update_data)
+
+            await db.execute(stmt)
+
+        await db.commit()  # 배치마다 커밋
+
+# ❌ 나쁜 예시 - 개별 처리
+async def bad_bulk_update(self, db: AsyncSession, updates: List[Dict]):
+    for update_data in updates:
+        stmt = update(Product).where(Product.id == update_data['id']).values(**update_data)
+        await db.execute(stmt)
+        await db.commit()  # 매번 커밋 (성능 저하)
+```
+
+## 🧪 테스트 데이터베이스
+
+### 테스트용 데이터베이스 설정
+```python
+# tests/conftest.py
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from src.adapters.persistence.models import Base
+
+@pytest.fixture(scope="session")
+def test_engine():
+    """테스트용 데이터베이스 엔진"""
+    engine = create_engine(
+        "sqlite:///./test_dropshipping.db",
+        echo=False  # 테스트에서는 로그 출력 안 함
+    )
+
+    # 테이블 생성
+    Base.metadata.create_all(bind=engine)
+
+    yield engine
+
+    # 테스트 완료 후 정리
+    Base.metadata.drop_all(bind=engine)
+
+@pytest.fixture
+def test_db(test_engine):
+    """테스트용 데이터베이스 세션"""
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+
+    with SessionLocal() as session:
+        try:
+            yield session
+        finally:
+            session.close()
+```
+
+### 테스트 데이터 생성
+```python
+# tests/fixtures/product_fixtures.py
+@pytest.fixture
+def sample_products(test_db):
+    """테스트용 상품 데이터"""
+    products = [
+        Product(
+            id="product_001",
+            title="테스트 상품 1",
+            supplier_id="supplier_001",
+            price_data='{"original_price": 10000, "margin_rate": 0.3}',
+            is_active=True
+        ),
+        Product(
+            id="product_002",
+            title="테스트 상품 2",
+            supplier_id="supplier_001",
+            price_data='{"original_price": 20000, "margin_rate": 0.2}',
+            is_active=True
+        )
+    ]
+
+    for product in products:
+        test_db.add(product)
+
+    test_db.commit()
+
+    return products
+```
+
+## 🔒 데이터 무결성
+
+### 제약조건 설정
+```python
+# ✅ 좋은 예시 - 적절한 제약조건
+class Product(Base):
+    __tablename__ = "products"
+
+    id = Column(String, primary_key=True, index=True)
+    supplier_id = Column(String, nullable=False, index=True)
+    title = Column(String, nullable=False)
+    price_data = Column(Text, nullable=False)
+
+    # 체크 제약조건
+    __table_args__ = (
+        CheckConstraint('length(title) > 0', name='title_not_empty'),
+        CheckConstraint('supplier_id != ""', name='supplier_id_not_empty'),
+    )
+
+# ❌ 나쁜 예시 - 제약조건 부족
+class BadProduct(Base):
+    title = Column(String)  # NULL 가능
+    supplier_id = Column(String)  # NULL 가능
+    # 데이터 무결성 보장 없음
+```
+
+### 데이터 검증
+```python
+# ✅ 좋은 예시 - 비즈니스 규칙 검증
+async def save_product(self, db: AsyncSession, product: Product) -> Result[Product, str]:
+    """상품 저장 (비즈니스 규칙 검증 포함)"""
+    # 1. 기본 데이터 검증
+    if not product.title or len(product.title.strip()) == 0:
+        return Failure("상품명이 필요합니다")
+
+    if not product.supplier_id:
+        return Failure("공급사 ID가 필요합니다")
+
+    # 2. 비즈니스 규칙 검증
+    if product.price_data.get("original_price", 0) <= 0:
+        return Failure("유효한 가격이 필요합니다")
+
+    if product.margin_rate < 0.1:
+        return Failure("마진율이 너무 낮습니다 (최소 10%)")
+
+    # 3. 중복 체크
+    existing = await self.find_by_hash(product.hash_key)
+    if existing:
+        return Failure("동일한 상품이 이미 존재합니다")
+
+    # 4. 저장
+    db.add(product)
+    await db.commit()
+
+    return Success(product)
+
+# ❌ 나쁜 예시 - 검증 부족
+async def bad_save_product(self, db: AsyncSession, product: Product):
+    db.add(product)
+    await db.commit()
+    return product  # 검증 없이 저장
+```
+
+## 📊 모니터링 및 로깅
+
+### 쿼리 성능 로깅
+```python
+import time
+from src.shared.logging import get_logger
+
+logger = get_logger(__name__)
+
+async def monitored_query(db: AsyncSession, query_name: str):
+    """쿼리 성능 모니터링"""
+    start_time = time.time()
+
+    try:
+        result = await db.execute(stmt)
+        duration = time.time() - start_time
+
+        logger.info(
+            f"쿼리 실행 완료: {query_name}",
+            extra={
+                "query_name": query_name,
+                "duration_ms": duration * 1000,
+                "row_count": len(result.all()) if hasattr(result, 'all') else 0
+            }
+        )
+
+        return result
+
+    except Exception as e:
+        duration = time.time() - start_time
+        logger.error(
+            f"쿼리 실행 실패: {query_name}",
+            extra={
+                "query_name": query_name,
+                "duration_ms": duration * 1000,
+                "error": str(e)
+            }
+        )
+        raise
+```
+
+### 데이터베이스 상태 모니터링
+```python
+async def check_database_health(db: AsyncSession) -> Dict[str, Any]:
+    """데이터베이스 상태 확인"""
+    health_info = {
+        "connected": False,
+        "tables_count": 0,
+        "total_records": 0,
+        "errors": []
+    }
+
+    try:
+        # 연결 테스트
+        await db.execute(text("SELECT 1"))
+        health_info["connected"] = True
+
+        # 테이블 개수 확인
+        result = await db.execute(text(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'"
+        ))
+        health_info["tables_count"] = result.scalar()
+
+        # 전체 레코드 수 (대략적)
+        for table_name in ["products", "orders", "suppliers"]:
+            try:
+                result = await db.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
+                count = result.scalar()
+                health_info["total_records"] += count
+            except:
+                pass
+
+    except Exception as e:
+        health_info["errors"].append(str(e))
+
+    return health_info
+```
+
+## 🔧 운영 가이드
+
+### 데이터베이스 백업
+```bash
+# SQLite 백업
+cp dropshipping.db dropshipping_backup_$(date +%Y%m%d_%H%M%S).db
+
+# PostgreSQL 백업
+pg_dump -h localhost -U username dropshipping > backup_$(date +%Y%m%d_%H%M%S).sql
+```
+
+### 성능 모니터링
+```sql
+-- 느린 쿼리 확인
+SELECT query, calls, total_time, mean_time
+FROM pg_stat_statements
+WHERE mean_time > 100  -- 100ms 이상 쿼리
+ORDER BY mean_time DESC;
+
+-- 테이블 크기 확인
+SELECT
+    schemaname,
+    tablename,
+    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
+FROM pg_tables
+ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
+```
+
+### 인덱스 최적화
+```sql
+-- 사용되지 않는 인덱스 확인
+SELECT
+    schemaname,
+    tablename,
+    indexname,
+    idx_scan as scans
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0  -- 사용되지 않는 인덱스
+ORDER BY tablename, indexname;
+
+-- 인덱스 사용률 확인
+SELECT
+    schemaname,
+    tablename,
+    indexname,
+    idx_scan,
+    idx_tup_read,
+    idx_tup_fetch
+FROM pg_stat_user_indexes
+ORDER BY idx_scan DESC;
+```
+
+이 가이드라인을 따라 효율적이고 안전한 데이터베이스 작업을 수행하세요.

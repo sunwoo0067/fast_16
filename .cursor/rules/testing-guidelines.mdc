@@ -1,0 +1,577 @@
+---
+alwaysApply: false
+description: "드랍십핑 자동화 시스템의 테스트 작성 가이드라인"
+globs: "tests/**/*.py,src/tests/**/*.{ts,tsx}"
+---
+
+# 테스트 작성 가이드라인
+
+드랍십핑 자동화 시스템의 안정성과 품질을 보장하기 위한 테스트 작성 가이드라인입니다.
+
+## 🧪 테스트 구조
+
+### 1. 테스트 파일 구조
+```
+tests/
+├── unit/                        # 단위 테스트
+│   ├── test_item_entity.py     # 도메인 엔티티 테스트
+│   ├── test_product_service.py # 서비스 로직 테스트
+│   └── test_api_client.py      # API 클라이언트 테스트
+├── integration/                 # 통합 테스트
+│   ├── test_database.py        # 데이터베이스 연동 테스트
+│   ├── test_api_endpoints.py   # API 엔드포인트 테스트
+│   └── test_full_workflow.py   # 전체 워크플로우 테스트
+└── e2e/                        # 엔드투엔드 테스트
+    └── test_user_journey.py    # 사용자 시나리오 테스트
+```
+
+## 🐍 Python 테스트 (pytest)
+
+### 1. 단위 테스트
+```python
+# tests/unit/test_product_service.py
+import pytest
+from unittest.mock import Mock, AsyncMock
+from src.core.entities.item import Item, PricePolicy
+from src.services.item_service import ItemService
+
+class TestItemService:
+    @pytest.fixture
+    def mock_repository(self):
+        """모의 리포지토리"""
+        mock = Mock()
+        mock.get_item_by_id = AsyncMock(return_value=None)
+        return mock
+
+    @pytest.fixture
+    def item_service(self, mock_repository):
+        """테스트 대상 서비스"""
+        return ItemService(repository=mock_repository)
+
+    async def test_get_product_success(self, item_service, mock_repository):
+        """상품 조회 성공 테스트"""
+        # Given
+        expected_item = Item(
+            id="test_001",
+            title="테스트 상품",
+            price=PricePolicy(original_price=10000)
+        )
+        mock_repository.get_item_by_id = AsyncMock(return_value=expected_item)
+
+        # When
+        result = await item_service.get_product("test_001")
+
+        # Then
+        assert result.is_success()
+        assert result.get_value().title == "테스트 상품"
+        mock_repository.get_item_by_id.assert_called_once_with("test_001")
+
+    async def test_get_product_not_found(self, item_service, mock_repository):
+        """상품 조회 실패 테스트"""
+        # Given
+        mock_repository.get_item_by_id = AsyncMock(return_value=None)
+
+        # When
+        result = await item_service.get_product("nonexistent")
+
+        # Then
+        assert result.is_failure()
+        assert "찾을 수 없습니다" in result.get_error()
+```
+
+### 2. 통합 테스트
+```python
+# tests/integration/test_api_endpoints.py
+import pytest
+from fastapi.testclient import TestClient
+from src.app.main import create_app
+
+class TestProductAPI:
+    @pytest.fixture
+    def client(self):
+        """테스트 클라이언트"""
+        app = create_app()
+        return TestClient(app)
+
+    def test_create_product_success(self, client):
+        """상품 생성 성공 테스트"""
+        # Given
+        product_data = {
+            "title": "테스트 상품",
+            "price": 10000,
+            "supplier_id": "supplier_001"
+        }
+
+        # When
+        response = client.post("/api/v1/products", json=product_data)
+
+        # Then
+        assert response.status_code == 201
+        data = response.json()
+        assert data["title"] == "테스트 상품"
+        assert "id" in data
+
+    def test_create_product_invalid_data(self, client):
+        """상품 생성 실패 테스트"""
+        # Given
+        invalid_data = {
+            "title": "",  # 빈 제목
+            "price": -1000  # 음수 가격
+        }
+
+        # When
+        response = client.post("/api/v1/products", json=invalid_data)
+
+        # Then
+        assert response.status_code == 422  # Validation Error
+```
+
+### 3. 데이터베이스 테스트
+```python
+# tests/integration/test_database.py
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from src.adapters.persistence.models import Base
+
+class TestDatabaseIntegration:
+    @pytest.fixture(scope="session")
+    def engine(self):
+        """테스트용 데이터베이스 엔진"""
+        engine = create_engine("sqlite:///./test.db", echo=False)
+        Base.metadata.create_all(bind=engine)
+        yield engine
+        Base.metadata.drop_all(bind=engine)
+
+    @pytest.fixture
+    def db_session(self, engine):
+        """테스트용 데이터베이스 세션"""
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        with SessionLocal() as session:
+            yield session
+
+    def test_product_crud_operations(self, db_session):
+        """상품 CRUD 연동 테스트"""
+        from src.adapters.persistence.repositories import ItemRepository
+        from src.core.entities.item import Item, PricePolicy
+
+        # Create
+        repository = ItemRepository(db_session)
+        test_item = Item(
+            id="test_001",
+            title="테스트 상품",
+            price=PricePolicy(original_price=10000)
+        )
+
+        repository.save_item(test_item)
+
+        # Read
+        retrieved_item = repository.get_item_by_id("test_001")
+        assert retrieved_item is not None
+        assert retrieved_item.title == "테스트 상품"
+
+        # Update
+        test_item.title = "수정된 상품"
+        repository.save_item(test_item)
+
+        updated_item = repository.get_item_by_id("test_001")
+        assert updated_item.title == "수정된 상품"
+```
+
+## ⚛️ React 테스트 (Jest + Testing Library)
+
+### 1. 컴포넌트 테스트
+```typescript
+// src/components/__tests__/ProductList.test.tsx
+import React from 'react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from 'react-query';
+import ProductList from '../ProductList';
+
+// 모의 데이터
+const mockProducts = [
+  { id: '1', title: '상품 1', price: 10000, status: 'active' },
+  { id: '2', title: '상품 2', price: 20000, status: 'inactive' },
+];
+
+const mockProps = {
+  products: mockProducts,
+  loading: false,
+  onEdit: jest.fn(),
+  onDelete: jest.fn(),
+};
+
+describe('ProductList', () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+  });
+
+  it('상품 목록이 올바르게 렌더링되는지 확인', () => {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProductList {...mockProps} />
+      </QueryClientProvider>
+    );
+
+    expect(screen.getByText('상품 1')).toBeInTheDocument();
+    expect(screen.getByText('상품 2')).toBeInTheDocument();
+  });
+
+  it('상품 수정 버튼이 클릭되면 onEdit가 호출되는지 확인', async () => {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProductList {...mockProps} />
+      </QueryClientProvider>
+    );
+
+    const editButton = screen.getAllByText('수정')[0];
+    fireEvent.click(editButton);
+
+    await waitFor(() => {
+      expect(mockProps.onEdit).toHaveBeenCalledWith(mockProducts[0]);
+    });
+  });
+
+  it('로딩 상태에서 스피너가 표시되는지 확인', () => {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProductList {...mockProps} loading={true} />
+      </QueryClientProvider>
+    );
+
+    expect(screen.getByRole('img', { hidden: true })).toBeInTheDocument(); // Spin 컴포넌트
+  });
+});
+```
+
+### 2. 훅 테스트
+```typescript
+// src/hooks/__tests__/useProducts.test.ts
+import { renderHook, act } from '@testing-library/react-hooks';
+import { QueryClient, QueryClientProvider } from 'react-query';
+import { useProductsStore } from '../../stores/products';
+
+// 모의 API
+jest.mock('../../services/api', () => ({
+  apiClient: {
+    getProducts: jest.fn(),
+  },
+}));
+
+describe('useProductsStore', () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+  });
+
+  it('상품 목록을 성공적으로 가져오는지 확인', async () => {
+    const mockProducts = [
+      { id: '1', title: '상품 1', price: 10000 },
+    ];
+
+    const { apiClient } = require('../../services/api');
+    apiClient.getProducts.mockResolvedValue({
+      items: mockProducts,
+      total: 1,
+      page: 1,
+      page_size: 20,
+    });
+
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        {children}
+      </QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useProductsStore(), { wrapper });
+
+    // 초기 상태 확인
+    expect(result.current.products).toEqual([]);
+    expect(result.current.loading).toBe(false);
+
+    // 상품 조회 액션 실행
+    await act(async () => {
+      await result.current.fetchProducts();
+    });
+
+    // 상태 변경 확인
+    expect(result.current.products).toEqual(mockProducts);
+    expect(result.current.loading).toBe(false);
+  });
+});
+```
+
+### 3. E2E 테스트 (Cypress)
+```typescript
+// cypress/integration/product_management.spec.ts
+describe('상품 관리', () => {
+  beforeEach(() => {
+    cy.visit('/products');
+  });
+
+  it('상품 목록이 표시되는지 확인', () => {
+    cy.contains('상품 관리').should('be.visible');
+    cy.get('[data-testid="product-table"]').should('exist');
+  });
+
+  it('상품을 생성할 수 있는지 확인', () => {
+    cy.get('[data-testid="add-product-btn"]').click();
+    cy.get('[data-testid="product-form"]').should('be.visible');
+
+    cy.get('[data-testid="product-name-input"]').type('새 상품');
+    cy.get('[data-testid="product-price-input"]').type('15000');
+    cy.get('[data-testid="submit-btn"]').click();
+
+    cy.contains('새 상품').should('be.visible');
+  });
+
+  it('상품을 검색할 수 있는지 확인', () => {
+    cy.get('[data-testid="search-input"]').type('기존 상품');
+    cy.get('[data-testid="search-btn"]').click();
+
+    cy.get('[data-testid="product-table"]').should('contain', '기존 상품');
+  });
+});
+```
+
+## 🔧 테스트 유틸리티
+
+### 1. 테스트 데이터 팩토리
+```python
+# tests/fixtures/factories.py
+from factory import Faker, SubFactory
+from factory.alchemy import SQLAlchemyModelFactory
+from src.adapters.persistence.models import Product, Supplier
+
+class SupplierFactory(SQLAlchemyModelFactory):
+    class Meta:
+        model = Supplier
+
+    name = Faker('company')
+    description = Faker('text', max_nb_chars=200)
+    is_active = True
+
+class ProductFactory(SQLAlchemyModelFactory):
+    class Meta:
+        model = Product
+
+    id = Faker('uuid4')
+    title = Faker('word')
+    supplier = SubFactory(SupplierFactory)
+    price_data = '{"original_price": 10000, "margin_rate": 0.3}'
+    is_active = True
+```
+
+### 2. API 테스트 헬퍼
+```python
+# tests/helpers/api_helpers.py
+from fastapi.testclient import TestClient
+from typing import Dict, Any
+
+class APIHelper:
+    def __init__(self, client: TestClient):
+        self.client = client
+
+    def create_product(self, product_data: Dict[str, Any]) -> Dict[str, Any]:
+        """상품 생성 헬퍼"""
+        response = self.client.post("/api/v1/products", json=product_data)
+        assert response.status_code == 201
+        return response.json()
+
+    def get_products(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """상품 목록 조회 헬퍼"""
+        response = self.client.get("/api/v1/products", params=params or {})
+        assert response.status_code == 200
+        return response.json()
+
+    def authenticate(self, username: str, password: str) -> str:
+        """인증 헬퍼"""
+        response = self.client.post("/api/v1/auth/login", json={
+            "username": username,
+            "password": password
+        })
+        assert response.status_code == 200
+        return response.json()["access_token"]
+```
+
+### 3. 데이터베이스 테스트 헬퍼
+```python
+# tests/helpers/db_helpers.py
+from sqlalchemy.orm import Session
+from src.adapters.persistence.models import Base
+from tests.fixtures.factories import ProductFactory, SupplierFactory
+
+def setup_test_database(session: Session):
+    """테스트 데이터베이스 설정"""
+    # 테이블 생성
+    Base.metadata.create_all(bind=session.bind)
+
+    # 테스트 데이터 생성
+    supplier = SupplierFactory()
+    products = ProductFactory.create_batch(5, supplier=supplier)
+
+    session.add_all([supplier] + products)
+    session.commit()
+
+    return {
+        "supplier": supplier,
+        "products": products
+    }
+
+def cleanup_test_database(session: Session):
+    """테스트 데이터베이스 정리"""
+    Base.metadata.drop_all(bind=session.bind)
+```
+
+## 📊 테스트 커버리지
+
+### 커버리지 목표
+```python
+# pytest.ini 또는 pyproject.toml
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/migrations/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
+```
+
+### 커버리지 확인
+```bash
+# 커버리지 실행
+pytest --cov=src --cov-report=html --cov-report=term
+
+# HTML 리포트 열기
+open htmlcov/index.html
+```
+
+## 🚀 CI/CD 테스트
+
+### GitHub Actions
+```yaml
+# .github/workflows/tests.yml
+name: Tests
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run tests
+        run: |
+          pytest --cov=src --cov-report=xml
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v1
+```
+
+### Docker 테스트
+```dockerfile
+# Dockerfile.test
+FROM python:3.9-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+RUN pip install pytest pytest-cov
+
+CMD ["pytest", "--cov=src", "--cov-report=html", "--cov-report=term"]
+```
+
+## 🧪 테스트 모범 사례
+
+### 1. 테스트 격리
+```python
+# ✅ 좋은 예시 - 각 테스트가 독립적
+class TestProductService:
+    def test_create_product(self, db_session):
+        # Given
+        repository = ItemRepository(db_session)
+
+        # When
+        result = await repository.save_item(test_item)
+
+        # Then
+        assert result.is_success()
+
+    def test_get_product(self, db_session):
+        # Given
+        repository = ItemRepository(db_session)
+        await repository.save_item(test_item)
+
+        # When
+        result = await repository.get_item_by_id(test_item.id)
+
+        # Then
+        assert result.title == test_item.title
+```
+
+### 2. 의미있는 테스트명
+```python
+# ✅ 좋은 예시
+def test_user_can_create_order_with_valid_data():
+def test_order_total_is_calculated_correctly():
+def test_product_becomes_unavailable_when_stock_is_zero():
+
+# ❌ 나쁜 예시
+def test_function1():
+def test_case_1():
+def test_123():
+```
+
+### 3. Arrange-Act-Assert 패턴
+```python
+def test_product_creation():
+    # Arrange - 테스트 준비
+    repository = MockRepository()
+    test_item = Item(id="1", title="Test")
+
+    # Act - 실행
+    result = await repository.save_item(test_item)
+
+    # Assert - 검증
+    assert result.is_success()
+    assert repository.was_called()
+```
+
+### 4. 에지 케이스 테스트
+```python
+def test_product_with_empty_title_should_fail():
+def test_product_with_negative_price_should_fail():
+def test_order_with_no_items_should_fail():
+def test_concurrent_updates_should_be_handled():
+```
+
+이 가이드라인을 따라 신뢰할 수 있는 테스트를 작성하세요.

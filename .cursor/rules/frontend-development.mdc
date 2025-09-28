@@ -1,0 +1,729 @@
+---
+alwaysApply: false
+description: "드랍십핑 자동화 시스템의 프런트엔드 개발 가이드라인"
+globs: "frontend/src/**/*.{ts,tsx}"
+---
+
+# 프런트엔드 개발 가이드라인
+
+드랍십핑 자동화 시스템의 React TypeScript 기반 프런트엔드 개발을 위한 가이드라인입니다.
+
+## 🏗️ 프로젝트 구조
+
+```
+frontend/
+├── src/
+│   ├── components/              # 재사용 가능한 UI 컴포넌트
+│   │   ├── common/             # 범용 컴포넌트 (Button, Modal 등)
+│   │   ├── layout/             # 레이아웃 컴포넌트 (Header, Sidebar)
+│   │   ├── forms/              # 폼 관련 컴포넌트
+│   │   └── features/           # 기능별 컴포넌트
+│   ├── pages/                  # 페이지 컴포넌트
+│   ├── hooks/                  # 커스텀 React 훅
+│   ├── services/               # API 클라이언트 및 서비스
+│   ├── stores/                 # 상태 관리 (Zustand)
+│   ├── types/                  # TypeScript 타입 정의
+│   ├── utils/                  # 유틸리티 함수
+│   ├── assets/                 # 정적 파일 (이미지, 폰트 등)
+│   └── App.tsx                 # 메인 애플리케이션
+├── package.json                # 의존성 및 스크립트
+├── tsconfig.json              # TypeScript 설정
+├── vite.config.ts             # Vite 설정
+└── index.html                 # HTML 템플릿
+```
+
+## ⚛️ React 컴포넌트 작성
+
+### 1. 컴포넌트 기본 구조
+```typescript
+// ✅ 좋은 예시
+import React, { useState, useEffect, useCallback } from 'react';
+import { Card, Table, Button, Space } from 'antd';
+import { Product } from '@/types';
+
+interface ProductListProps {
+  products: Product[];
+  loading?: boolean;
+  onEdit?: (product: Product) => void;
+  onDelete?: (productId: string) => void;
+}
+
+const ProductList: React.FC<ProductListProps> = ({
+  products,
+  loading = false,
+  onEdit,
+  onDelete
+}) => {
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+
+  const handleSelectChange = useCallback((selectedRowKeys: React.Key[]) => {
+    setSelectedRowKeys(selectedRowKeys);
+  }, []);
+
+  const columns = [
+    {
+      title: '상품명',
+      dataIndex: 'title',
+      key: 'title',
+      ellipsis: true,
+    },
+    {
+      title: '가격',
+      dataIndex: 'price',
+      key: 'price',
+      render: (price: number) => `${price.toLocaleString()}원`,
+    },
+    {
+      title: '액션',
+      key: 'actions',
+      render: (record: Product) => (
+        <Space>
+          <Button onClick={() => onEdit?.(record)}>수정</Button>
+          <Button danger onClick={() => onDelete?.(record.id)}>삭제</Button>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <Card title="상품 목록">
+      <Table
+        columns={columns}
+        dataSource={products}
+        loading={loading}
+        rowKey="id"
+        rowSelection={{
+          selectedRowKeys,
+          onChange: handleSelectChange,
+        }}
+      />
+    </Card>
+  );
+};
+
+export default ProductList;
+```
+
+### 2. 상태 관리 (Zustand)
+```typescript
+// ✅ 좋은 예시
+import { create } from 'zustand';
+import { devtools } from 'zustand/middleware';
+
+interface ProductsState {
+  products: Product[];
+  loading: boolean;
+  error: string | null;
+
+  fetchProducts: () => Promise<void>;
+  createProduct: (product: ProductCreateRequest) => Promise<void>;
+  updateProduct: (id: string, product: ProductUpdateRequest) => Promise<void>;
+  deleteProduct: (id: string) => Promise<void>;
+  clearError: () => void;
+}
+
+export const useProductsStore = create<ProductsState>()(
+  devtools(
+    (set, get) => ({
+      products: [],
+      loading: false,
+      error: null,
+
+      fetchProducts: async () => {
+        set({ loading: true, error: null });
+        try {
+          const response = await apiClient.getProducts();
+          set({ products: response.items, loading: false });
+        } catch (error: any) {
+          set({
+            error: error.response?.data?.detail || '상품 목록을 불러오는데 실패했습니다.',
+            loading: false
+          });
+        }
+      },
+
+      // ... 다른 액션들
+    }),
+    { name: 'products-store' }
+  )
+);
+```
+
+### 3. API 클라이언트
+```typescript
+// ✅ 좋은 예시
+import axios, { AxiosResponse } from 'axios';
+
+class ApiClient {
+  private client = axios.create({
+    baseURL: '/api/v1',
+    timeout: 30000,
+  });
+
+  constructor() {
+    // 응답 인터셉터
+    this.client.interceptors.response.use(
+      (response: AxiosResponse) => response,
+      (error) => {
+        if (error.response?.status === 401) {
+          // 인증 만료 처리
+          window.location.href = '/login';
+        }
+        return Promise.reject(error);
+      }
+    );
+  }
+
+  async getProducts(params?: ProductFilters): Promise<ProductListResponse> {
+    const response = await this.client.get('/products', { params });
+    return response.data;
+  }
+}
+
+// ❌ 나쁜 예시
+class BadApiClient {
+  async getData() {
+    // 직접 fetch 사용, 에러 처리 없음
+    const response = await fetch('/api/data');
+    return response.json();
+  }
+}
+```
+
+## 🎨 UI/UX 가이드라인
+
+### 1. Ant Design 사용
+```typescript
+// ✅ 좋은 예시 - Ant Design 컴포넌트 활용
+import { Table, Button, Modal, Form, Input, Select, message } from 'antd';
+import { EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
+
+const ProductForm: React.FC = () => {
+  const [form] = Form.useForm();
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (values: any) => {
+    setLoading(true);
+    try {
+      await apiClient.createProduct(values);
+      message.success('상품이 생성되었습니다.');
+      form.resetFields();
+    } catch (error) {
+      message.error('상품 생성에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Form form={form} onFinish={handleSubmit} layout="vertical">
+      <Form.Item
+        name="title"
+        label="상품명"
+        rules={[{ required: true, message: '상품명을 입력해주세요' }]}
+      >
+        <Input placeholder="상품명을 입력하세요" />
+      </Form.Item>
+
+      <Form.Item>
+        <Button type="primary" htmlType="submit" loading={loading}>
+          상품 생성
+        </Button>
+      </Form.Item>
+    </Form>
+  );
+};
+```
+
+### 2. 반응형 디자인
+```typescript
+// ✅ 좋은 예시 - 반응형 그리드
+import { Row, Col } from 'antd';
+
+const Dashboard: React.FC = () => {
+  return (
+    <div>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card>
+            <Statistic title="총 상품" value={stats.total_products} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card>
+            <Statistic title="총 주문" value={stats.total_orders} />
+          </Card>
+        </Col>
+        {/* ... 다른 카드들 */}
+      </Row>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} lg={12}>
+          <Card title="최근 상품">
+            <ProductTable />
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card title="최근 주문">
+            <OrderTable />
+          </Card>
+        </Col>
+      </Row>
+    </div>
+  );
+};
+```
+
+### 3. 로딩 상태 관리
+```typescript
+// ✅ 좋은 예시 - 로딩 상태 처리
+const ProductList: React.FC = () => {
+  const { products, loading, error, fetchProducts } = useProductsStore();
+
+  useEffect(() => {
+    fetchProducts();
+  }, []);
+
+  if (error) {
+    return (
+      <Alert
+        message="오류"
+        description={error}
+        type="error"
+        closable
+        onClose={() => clearError()}
+      />
+    );
+  }
+
+  return (
+    <Table
+      columns={columns}
+      dataSource={products}
+      loading={loading}
+      rowKey="id"
+    />
+  );
+};
+```
+
+## 🔧 상태 관리 (Zustand)
+
+### 1. 스토어 설계
+```typescript
+// ✅ 좋은 예시 - 모듈화된 스토어
+// stores/products.ts
+interface ProductsState {
+  products: Product[];
+  loading: boolean;
+  error: string | null;
+  filters: ProductFilters;
+
+  fetchProducts: (filters?: ProductFilters) => Promise<void>;
+  createProduct: (product: ProductCreateRequest) => Promise<void>;
+  updateProduct: (id: string, product: ProductUpdateRequest) => Promise<void>;
+  deleteProduct: (id: string) => Promise<void>;
+  setFilters: (filters: Partial<ProductFilters>) => void;
+  clearError: () => void;
+}
+
+// stores/index.ts
+export { useProductsStore } from './products';
+export { useOrdersStore } from './orders';
+export { useSuppliersStore } from './suppliers';
+export { useDashboardStore } from './dashboard';
+```
+
+### 2. 비동기 액션 처리
+```typescript
+// ✅ 좋은 예시 - 에러 처리 포함
+const useProductsStore = create<ProductsState>()(
+  devtools(
+    (set, get) => ({
+      products: [],
+      loading: false,
+      error: null,
+      filters: {},
+
+      fetchProducts: async (filters = {}) => {
+        set({ loading: true, error: null });
+
+        try {
+          const mergedFilters = { ...get().filters, ...filters };
+          const response = await apiClient.getProducts(mergedFilters);
+
+          set({
+            products: response.items,
+            filters: mergedFilters,
+            loading: false
+          });
+        } catch (error: any) {
+          set({
+            error: error.response?.data?.detail || '상품 목록을 불러오는데 실패했습니다.',
+            loading: false
+          });
+        }
+      },
+
+      // ... 다른 액션들
+    }),
+    { name: 'products-store' }
+  )
+);
+```
+
+## 🌐 API 연동
+
+### 1. API 클라이언트
+```typescript
+// ✅ 좋은 예시 - 타입 안전한 API 클라이언트
+import axios, { AxiosResponse } from 'axios';
+
+class ApiClient {
+  private client = axios.create({
+    baseURL: '/api/v1',
+    timeout: 30000,
+  });
+
+  async getProducts(params?: ProductFilters): Promise<ProductListResponse> {
+    const response = await this.client.get('/products', { params });
+    return response.data;
+  }
+
+  async createProduct(product: ProductCreateRequest): Promise<Product> {
+    const response = await this.client.post('/products', product);
+    return response.data;
+  }
+
+  async updateProduct(id: string, product: ProductUpdateRequest): Promise<Product> {
+    const response = await this.client.put(`/products/${id}`, product);
+    return response.data;
+  }
+
+  async deleteProduct(id: string): Promise<void> {
+    await this.client.delete(`/products/${id}`);
+  }
+}
+
+// ❌ 나쁜 예시 - 타입 안전성 부족
+class BadApiClient {
+  async getData() {
+    const response = await fetch('/api/data');
+    return response.json(); // 타입 정보 없음
+  }
+}
+```
+
+### 2. 에러 처리
+```typescript
+// ✅ 좋은 예시 - 포괄적인 에러 처리
+const handleApiError = (error: any): string => {
+  if (error.response) {
+    // 서버 응답 오류
+    const { status, data } = error.response;
+    switch (status) {
+      case 400:
+        return data.detail || '잘못된 요청입니다.';
+      case 401:
+        return '인증이 필요합니다.';
+      case 403:
+        return '접근 권한이 없습니다.';
+      case 404:
+        return '요청한 리소스를 찾을 수 없습니다.';
+      case 500:
+        return '서버 내부 오류가 발생했습니다.';
+      default:
+        return `오류가 발생했습니다. (${status})`;
+    }
+  } else if (error.request) {
+    // 네트워크 오류
+    return '네트워크 연결을 확인해주세요.';
+  } else {
+    // 기타 오류
+    return '예상치 못한 오류가 발생했습니다.';
+  }
+};
+```
+
+## 🎯 성능 최적화
+
+### 1. 코드 분할
+```typescript
+// ✅ 좋은 예시 - 동적 import
+const ProductDetails = lazy(() => import('@/components/ProductDetails'));
+
+const ProductPage: React.FC = () => {
+  return (
+    <Suspense fallback={<Spin />}>
+      <ProductDetails />
+    </Suspense>
+  );
+};
+```
+
+### 2. 메모이제이션
+```typescript
+// ✅ 좋은 예시 - React.memo와 useMemo
+const ProductItem = memo(({ product, onEdit }: { product: Product; onEdit: (id: string) => void }) => {
+  const formattedPrice = useMemo(() => {
+    return product.price.toLocaleString();
+  }, [product.price]);
+
+  return (
+    <div>
+      <span>{product.title}</span>
+      <span>{formattedPrice}원</span>
+      <Button onClick={() => onEdit(product.id)}>수정</Button>
+    </div>
+  );
+});
+```
+
+### 3. 가상화 (대량 데이터)
+```typescript
+// ✅ 좋은 예시 - react-window 사용
+import { FixedSizeList as List } from 'react-window';
+
+const ProductList: React.FC = () => {
+  const { products } = useProductsStore();
+
+  const Item = ({ index, style }: { index: number; style: React.CSSProperties }) => {
+    const product = products[index];
+    return (
+      <div style={style}>
+        <ProductItem product={product} />
+      </div>
+    );
+  };
+
+  return (
+    <List
+      height={400}
+      itemCount={products.length}
+      itemSize={50}
+      width="100%"
+    >
+      {Item}
+    </List>
+  );
+};
+```
+
+## 🧪 테스트 작성
+
+### 1. 컴포넌트 테스트
+```typescript
+// ✅ 좋은 예시 - React Testing Library
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from 'react-query';
+import ProductList from '@/components/ProductList';
+
+const mockProducts = [
+  { id: '1', title: '테스트 상품 1', price: 10000 },
+  { id: '2', title: '테스트 상품 2', price: 20000 },
+];
+
+test('상품 목록이 올바르게 렌더링되는지 확인', async () => {
+  const queryClient = new QueryClient();
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <ProductList products={mockProducts} />
+    </QueryClientProvider>
+  );
+
+  // 상품들이 렌더링되는지 확인
+  expect(screen.getByText('테스트 상품 1')).toBeInTheDocument();
+  expect(screen.getByText('테스트 상품 2')).toBeInTheDocument();
+});
+```
+
+### 2. 훅 테스트
+```typescript
+// ✅ 좋은 예시 - @testing-library/react-hooks
+import { renderHook, act } from '@testing-library/react-hooks';
+import { useProductsStore } from '@/stores/products';
+
+test('상품 스토어가 올바르게 작동하는지 확인', async () => {
+  const { result } = renderHook(() => useProductsStore());
+
+  // 초기 상태 확인
+  expect(result.current.products).toEqual([]);
+  expect(result.current.loading).toBe(false);
+
+  // 액션 호출
+  await act(async () => {
+    await result.current.fetchProducts();
+  });
+
+  // 상태 변경 확인
+  expect(result.current.loading).toBe(false);
+});
+```
+
+## 🔒 보안 고려사항
+
+### 1. 입력 검증
+```typescript
+// ✅ 좋은 예시 - 서버사이드 검증 + 클라이언트 검증
+const ProductForm: React.FC = () => {
+  const [form] = Form.useForm();
+
+  const handleSubmit = async (values: any) => {
+    try {
+      // 클라이언트 사이드 기본 검증
+      if (!values.title?.trim()) {
+        message.error('상품명을 입력해주세요.');
+        return;
+      }
+
+      if (values.price <= 0) {
+        message.error('유효한 가격을 입력해주세요.');
+        return;
+      }
+
+      // 서버 API 호출
+      await apiClient.createProduct(values);
+      message.success('상품이 생성되었습니다.');
+    } catch (error) {
+      message.error('상품 생성에 실패했습니다.');
+    }
+  };
+
+  return (
+    <Form form={form} onFinish={handleSubmit}>
+      <Form.Item
+        name="title"
+        label="상품명"
+        rules={[
+          { required: true, message: '상품명을 입력해주세요' },
+          { min: 1, message: '상품명을 입력해주세요' }
+        ]}
+      >
+        <Input />
+      </Form.Item>
+
+      <Form.Item
+        name="price"
+        label="가격"
+        rules={[
+          { required: true, message: '가격을 입력해주세요' },
+          { type: 'number', min: 1, message: '유효한 가격을 입력해주세요' }
+        ]}
+      >
+        <InputNumber min={1} />
+      </Form.Item>
+    </Form>
+  );
+};
+```
+
+### 2. XSS 방지
+```typescript
+// ✅ 좋은 예시 - DOMPurify 사용
+import DOMPurify from 'dompurify';
+
+const ProductDescription: React.FC<{ content: string }> = ({ content }) => {
+  const sanitizedContent = DOMPurify.sanitize(content);
+
+  return (
+    <div dangerouslySetInnerHTML={{ __html: sanitizedContent }} />
+  );
+};
+```
+
+## 📱 반응형 디자인
+
+### 1. Ant Design Breakpoint 활용
+```typescript
+// ✅ 좋은 예시 - 반응형 그리드
+import { Grid } from 'antd';
+
+const { useBreakpoint } = Grid;
+
+const ResponsiveDashboard: React.FC = () => {
+  const screens = useBreakpoint();
+
+  return (
+    <Row gutter={[16, 16]}>
+      <Col xs={24} sm={12} lg={6}>
+        <Statistic title="총 상품" value={stats.total_products} />
+      </Col>
+      <Col xs={24} sm={12} lg={6}>
+        <Statistic title="총 주문" value={stats.total_orders} />
+      </Col>
+
+      {/* 모바일에서는 숨김 */}
+      {!screens.xs && (
+        <Col lg={12}>
+          <ChartComponent />
+        </Col>
+      )}
+    </Row>
+  );
+};
+```
+
+### 2. 커스텀 미디어 쿼리
+```typescript
+// ✅ 좋은 예시 - CSS-in-JS 반응형
+const StyledCard = styled(Card)`
+  @media (max-width: 768px) {
+    .ant-card-body {
+      padding: 12px;
+    }
+
+    .ant-statistic-title {
+      font-size: 12px;
+    }
+
+    .ant-statistic-content-value {
+      font-size: 18px;
+    }
+  }
+`;
+```
+
+## 🚀 배포 가이드
+
+### 1. 빌드 및 배포
+```bash
+# 개발 빌드
+npm run build
+
+# 프로덕션 빌드
+npm run build:prod
+
+# 미리보기
+npm run preview
+
+# 배포 (예: Vercel, Netlify)
+npm run deploy
+```
+
+### 2. 환경 설정
+```typescript
+// .env 파일
+VITE_API_BASE_URL=https://api.your-domain.com/api/v1
+VITE_WS_URL=wss://api.your-domain.com/ws
+VITE_APP_TITLE=드랍십핑 관리자
+```
+
+### 3. Docker 배포
+```dockerfile
+# Dockerfile
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/nginx.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+이 가이드라인을 따라 고품질의 React TypeScript 애플리케이션을 개발하세요.
