@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import logging
 
-from src.app.routes import health, items, products, suppliers, orders
+from src.app.routes import health, items, products, suppliers, orders, order_collection
 from src.shared.config import get_settings
 from src.shared.logging import get_logger
 from src.adapters.persistence.models import get_db
@@ -69,6 +69,7 @@ def create_app() -> FastAPI:
     api_router.include_router(products.router, prefix="/products", tags=["products"])
     api_router.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
     api_router.include_router(orders.router, prefix="/orders", tags=["orders"])
+    api_router.include_router(order_collection.router, prefix="/order-collection", tags=["order-collection"])
 
     app.include_router(api_router)
 

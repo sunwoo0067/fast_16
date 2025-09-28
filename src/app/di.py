@@ -10,6 +10,7 @@ from src.core.ports.clock_port import ClockPort
 from src.core.usecases.ingest_items import IngestItemsUseCase
 from src.core.usecases.normalize_items import NormalizeItemsUseCase
 from src.core.usecases.publish_to_market import PublishToMarketUseCase
+from src.core.usecases.collect_orders import CollectOrdersUseCase
 from src.services.item_service import ItemService
 from src.services.supplier_service import SupplierService
 from src.services.order_service import OrderService
@@ -96,6 +97,15 @@ def get_publish_to_market_usecase(
 ) -> PublishToMarketUseCase:
     """마켓 업로드 유즈케이스"""
     return PublishToMarketUseCase(market_port, repository, clock)
+
+
+def get_collect_orders_usecase(
+    supplier_port: SupplierPort = Depends(get_supplier_port),
+    repository: RepositoryPort = Depends(get_repository),
+    clock: ClockPort = Depends(get_clock)
+) -> CollectOrdersUseCase:
+    """주문 수집 유즈케이스"""
+    return CollectOrdersUseCase(supplier_port, repository, clock)
 
 
 def get_item_service(

@@ -136,9 +136,10 @@ DEBUG=false
 DATABASE_URL=postgresql+asyncpg://username:password@localhost:5432/database_name
 
 # OwnerClan API 인증 정보 (실제 계정 정보로 변경)
-OWNERCLAN_ACCOUNT_ID=your_account_id
-OWNERCLAN_PASSWORD=your_password
-OWNERCLAN_API_URL=https://api.ownerclan.com/v1/graphql
+OWNERCLAN_USERNAME=your_ownerclan_id
+OWNERCLAN_PASSWORD=your_ownerclan_password
+OWNERCLAN_SUPPLIER_ID=your_supplier_id
+OWNERCLAN_API_URL=https://api-sandbox.ownerclan.com/v1/graphql
 OWNERCLAN_AUTH_URL=https://auth.ownerclan.com/auth
 
 # 상품 동기화 설정
@@ -258,7 +259,7 @@ Content-Type: application/json
 }
 ```
 
-#### 3. 주문 관리
+#### 3. 주문 관리 (드랍십핑 자동화)
 ```bash
 # 주문 생성
 POST /api/v1/orders/
@@ -304,9 +305,31 @@ Content-Type: application/json
 {
   "reason": "고객 요청"
 }
+
+# 주문 수집 (드랍십핑 자동화)
+POST /api/v1/order-collection/collect
+Content-Type: application/json
+
+[
+  {
+    "external_order_id": "external_001",
+    "customer_name": "김철수",
+    "customer_phone": "010-1234-5678",
+    "items": [
+      {
+        "product_id": "item_001",
+        "product_name": "테스트 상품",
+        "quantity": 1,
+        "unit_price": 15000
+      }
+    ],
+    "shipping_fee": 3000,
+    "order_memo": "신속 배송 요청"
+  }
+]
 ```
 
-#### 4. 공급사 관리
+#### 4. 공급사 관리 (OwnerClan 연동)
 ```bash
 # 공급사 생성
 POST /api/v1/suppliers/
@@ -333,6 +356,35 @@ Content-Type: application/json
   "default_margin_rate": 0.3,
   "sync_enabled": true
 }
+
+# OwnerClan 연결 테스트
+POST /api/v1/order-collection/test-connection
+Content-Type: application/json
+
+{
+  "supplier_id": "your_supplier_id",
+  "account_name": "main_account"
+}
+```
+
+### 5. 드랍십핑 자동화 (OwnerClan 연동)
+```bash
+# 상품 동기화 실행
+python comprehensive_ownerclan_sync_final.py
+
+# 특정 조건 상품 동기화
+python -c "
+from src.adapters.suppliers.ownerclan_adapter import OwnerClanAdapter
+import asyncio
+
+async def test():
+    adapter = OwnerClanAdapter()
+    # 실제 인증 정보가 필요합니다
+    items = await adapter.fetch_items_by_price_range('supplier_id', 'account_id', 10000, 100000)
+    print(f'가격 범위 상품: {len(items)}개')
+
+asyncio.run(test())
+"
 ```
 
 ### 에러 응답 형식
