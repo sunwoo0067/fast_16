@@ -1,0 +1,6 @@
+# ������ API ���� (���� ��Ʈ�ʽ���)
+# �Ʒ��� ���� Ű�� �Է��ϼ���:
+
+COUPANG_ACCESS_KEY=a825d408-a53d-4234-bdaa-be67acd67e5d
+COUPANG_VENDOR_ID=A01282691
+COUPANG_SECRET_KEY=856d45fae108cbf8029eaa0544bcbeed2a21f9d4
