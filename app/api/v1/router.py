@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import suppliers, products, auth, orders, categories, coupang, tasks, ownerclan, websocket, progress, dashboard
+from app.api.v1.endpoints import suppliers, products, auth, orders, categories, coupang, tasks, ownerclan, websocket, progress, dashboard, price_policies
 
 # 메인 API 라우터
 api_router = APIRouter()
@@ -69,5 +69,11 @@ api_router.include_router(
     dashboard.router,
     prefix="/dashboard",
     tags=["dashboard"]
+)
+
+api_router.include_router(
+    price_policies.router,
+    prefix="/price-policies",
+    tags=["price-policies"]
 )
 

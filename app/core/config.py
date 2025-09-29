@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # 데이터베이스 설정
-    database_url: str = "postgresql+asyncpg://postgres:12345678@localhost:5433/fast_15"
+    database_url: str = "postgresql+asyncpg://postgres:12345678@localhost:5433/fast_16"
 
     # 상품 동기화 설정
     sync_batch_size: int = 50
@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     max_shipping_days: int = 14       # 최대 배송일
 
     # OwnerClan API 설정
+    ownerclan_account_id: str = "b00679540"
+    ownerclan_password: str = "ehdgod1101*"
     ownerclan_api_url: str = "https://api.ownerclan.com/v1/graphql"
     ownerclan_auth_url: str = "https://auth.ownerclan.com/auth"
 
@@ -43,9 +45,9 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"  # 예상치 못한 필드들을 무시
 
 @lru_cache()
 def get_settings() -> Settings:
     """설정 인스턴스를 반환 (싱글톤)"""
     return Settings()
-

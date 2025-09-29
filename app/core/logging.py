@@ -13,8 +13,14 @@ class ProductSyncFormatter(logging.Formatter):
         # 로그 레코드에 추가 정보가 있는 경우 JSON으로 변환
         if hasattr(record, 'product_data'):
             record.product_info = json.dumps(record.product_data, ensure_ascii=False, default=str)
+        else:
+            record.product_info = ""
+            
         if hasattr(record, 'sync_stats'):
             record.sync_stats_info = json.dumps(record.sync_stats, ensure_ascii=False, default=str)
+        else:
+            record.sync_stats_info = ""
+            
         return super().format(record)
 
 class DropshippingFormatter(logging.Formatter):

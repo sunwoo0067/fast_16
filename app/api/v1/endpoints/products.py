@@ -76,9 +76,9 @@ class ProductUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 class ProductResponse(BaseModel):
-    id: int
-    supplier_id: int
-    supplier_account_id: int
+    id: str  # String으로 변경
+    supplier_id: str  # String으로 변경
+    supplier_account_id: Optional[int] = None  # Optional로 변경
     item_key: str
     name: str
     price: int
@@ -113,7 +113,7 @@ class ProductResponse(BaseModel):
     # 상품 설명 및 이미지
     description: Optional[str]
     images: Optional[List[str]]
-    options: Optional[Dict[str, Any]]
+    options: Optional[Any]  # Dict 또는 List 모두 허용
 
     created_at: datetime
     updated_at: datetime
@@ -256,12 +256,12 @@ async def get_products(
             ProductResponse(
                 id=product.id,
                 supplier_id=product.supplier_id,
-                supplier_account_id=product.supplier_account_id,
+                supplier_account_id=None,  # Product 모델에 없는 필드
                 item_key=product.item_key,
-                name=product.name,
-                price=product.price,
-                sale_price=product.sale_price,
-                margin_rate=product.margin_rate,
+                name=product.title,  # name -> title로 변경
+                price=json.loads(product.price_data or '{}').get('original', 0) if product.price_data else 0,
+                sale_price=json.loads(product.price_data or '{}').get('sale', 0) if product.price_data else 0,
+                margin_rate=json.loads(product.price_data or '{}').get('margin_rate', 0) if product.price_data else 0,
                 stock_quantity=product.stock_quantity,
                 max_stock_quantity=product.max_stock_quantity,
                 supplier_product_id=product.supplier_product_id,
@@ -274,11 +274,11 @@ async def get_products(
                 last_synced_at=product.last_synced_at,
                 sync_error_message=product.sync_error_message,
                 category_id=product.category_id,
-                category_name=product.category_name,
-                coupang_product_id=product.coupang_product_id,
-                coupang_status=product.coupang_status,
-                coupang_category_id=product.coupang_category_id,
-                manufacturer=product.manufacturer,
+                category_name=None,  # Product 모델에 없는 필드
+                coupang_product_id=None,  # Product 모델에 없는 필드
+                coupang_status=None,  # Product 모델에 없는 필드
+                coupang_category_id=None,  # Product 모델에 없는 필드
+                manufacturer=None,  # Product 모델에 없는 필드
                 description=product.description,
                 images=json.loads(product.images) if product.images else None,
                 options=json.loads(product.options) if product.options else None,
@@ -295,7 +295,7 @@ async def get_products(
 
 @router.put("/{product_id}", response_model=ProductResponse)
 async def update_product(
-    product_id: int,
+    product_id: str,  # String으로 변경
     product_data: ProductUpdate,
     db: AsyncSession = Depends(get_db)
 ):
@@ -304,26 +304,49 @@ async def update_product(
         logger.info(f"상품 수정 요청: ID={product_id}")
         product_service = ProductService(db)
 
-        product = await product_service.update_product(
-            product_id=product_id,
-            name=product_data.name,
-            price=product_data.price,
-            sale_price=product_data.sale_price,
-            margin_rate=product_data.margin_rate,
-            stock_quantity=product_data.stock_quantity,
-            max_stock_quantity=product_data.max_stock_quantity,
-            supplier_product_id=product_data.supplier_product_id,
-            supplier_name=product_data.supplier_name,
-            supplier_url=product_data.supplier_url,
-            supplier_image_url=product_data.supplier_image_url,
-            estimated_shipping_days=product_data.estimated_shipping_days,
-            category_id=product_data.category_id,
-            category_name=product_data.category_name,
-            description=product_data.description,
-            images=product_data.images,
-            options=product_data.options,
-            is_active=product_data.is_active
-        )
+        # Product 모델에 맞게 업데이트
+        update_data = {}
+        if product_data.name is not None:
+            update_data['title'] = product_data.name  # name -> title로 변경
+        if product_data.price is not None or product_data.sale_price is not None or product_data.margin_rate is not None:
+            # 기존 price_data 가져오기
+            existing_product = await product_service.get_product_by_id(product_id)
+            if existing_product:
+                existing_price_data = json.loads(existing_product.price_data or '{}')
+                if product_data.price is not None:
+                    existing_price_data['original'] = product_data.price
+                if product_data.sale_price is not None:
+                    existing_price_data['sale'] = product_data.sale_price
+                if product_data.margin_rate is not None:
+                    existing_price_data['margin_rate'] = product_data.margin_rate
+                update_data['price_data'] = json.dumps(existing_price_data)
+        
+        if product_data.stock_quantity is not None:
+            update_data['stock_quantity'] = product_data.stock_quantity
+        if product_data.max_stock_quantity is not None:
+            update_data['max_stock_quantity'] = product_data.max_stock_quantity
+        if product_data.supplier_product_id is not None:
+            update_data['supplier_product_id'] = product_data.supplier_product_id
+        if product_data.supplier_name is not None:
+            update_data['supplier_name'] = product_data.supplier_name
+        if product_data.supplier_url is not None:
+            update_data['supplier_url'] = product_data.supplier_url
+        if product_data.supplier_image_url is not None:
+            update_data['supplier_image_url'] = product_data.supplier_image_url
+        if product_data.estimated_shipping_days is not None:
+            update_data['estimated_shipping_days'] = product_data.estimated_shipping_days
+        if product_data.category_id is not None:
+            update_data['category_id'] = product_data.category_id
+        if product_data.description is not None:
+            update_data['description'] = product_data.description
+        if product_data.images is not None:
+            update_data['images'] = json.dumps(product_data.images)
+        if product_data.options is not None:
+            update_data['options'] = json.dumps(product_data.options)
+        if product_data.is_active is not None:
+            update_data['is_active'] = product_data.is_active
+
+        product = await product_service.update_product_by_id(product_id, **update_data)
 
         if not product:
             raise ProductSyncError(f"상품을 찾을 수 없습니다 (ID: {product_id})")
@@ -332,12 +355,12 @@ async def update_product(
         return ProductResponse(
             id=product.id,
             supplier_id=product.supplier_id,
-            supplier_account_id=product.supplier_account_id,
+            supplier_account_id=None,  # Product 모델에 없는 필드
             item_key=product.item_key,
-            name=product.name,
-            price=product.price,
-            sale_price=product.sale_price,
-            margin_rate=product.margin_rate,
+            name=product.title,  # title -> name으로 매핑
+            price=json.loads(product.price_data or '{}').get('original', 0) if product.price_data else 0,
+            sale_price=json.loads(product.price_data or '{}').get('sale', 0) if product.price_data else 0,
+            margin_rate=json.loads(product.price_data or '{}').get('margin_rate', 0) if product.price_data else 0,
             stock_quantity=product.stock_quantity,
             max_stock_quantity=product.max_stock_quantity,
             supplier_product_id=product.supplier_product_id,
@@ -350,11 +373,11 @@ async def update_product(
             last_synced_at=product.last_synced_at,
             sync_error_message=product.sync_error_message,
             category_id=product.category_id,
-            category_name=product.category_name,
-            coupang_product_id=product.coupang_product_id,
-            coupang_status=product.coupang_status,
-            coupang_category_id=product.coupang_category_id,
-            manufacturer=product.manufacturer,
+            category_name=None,  # Product 모델에 없는 필드
+            coupang_product_id=None,  # Product 모델에 없는 필드
+            coupang_status=None,  # Product 모델에 없는 필드
+            coupang_category_id=None,  # Product 모델에 없는 필드
+            manufacturer=None,  # Product 모델에 없는 필드
             description=product.description,
             images=json.loads(product.images) if product.images else None,
             options=json.loads(product.options) if product.options else None,
@@ -368,49 +391,6 @@ async def update_product(
         logger.error(f"상품 수정 실패: {e}")
         raise create_http_exception(ProductSyncError(f"상품 수정 실패: {str(e)}"))
 
-@router.get("/stats/{supplier_id}")
-async def get_product_stats(
-    supplier_id: int,
-    db: AsyncSession = Depends(get_db)
-):
-    """공급사의 상품 통계 조회"""
-    try:
-        product_service = ProductService(db)
-        stats = await product_service.get_product_stats(supplier_id)
-
-        return stats
-
-    except Exception as e:
-        logger.error(f"상품 통계 조회 실패: {e}")
-        raise create_http_exception(ProductSyncError(f"상품 통계 조회 실패: {str(e)}"))
-
-@router.post("/sync-history")
-async def get_product_sync_history(
-    supplier_id: int,
-    product_id: Optional[int] = None,
-    sync_type: Optional[str] = None,
-    status: Optional[str] = None,
-    limit: int = 50,
-    offset: int = 0,
-    db: AsyncSession = Depends(get_db)
-):
-    """상품 동기화 이력 조회"""
-    try:
-        product_service = ProductService(db)
-        history = await product_service.get_sync_history(
-            supplier_id=supplier_id,
-            product_id=product_id,
-            sync_type=sync_type,
-            status=status,
-            limit=limit,
-            offset=offset
-        )
-
-        return history
-
-    except Exception as e:
-        logger.error(f"동기화 이력 조회 실패: {e}")
-        raise create_http_exception(ProductSyncError(f"동기화 이력 조회 실패: {str(e)}"))
 
 # 백그라운드 작업 함수들
 async def _bulk_create_products_background(
@@ -622,89 +602,10 @@ async def _collect_all_suppliers_with_progress_background(
             "error": str(e)
         })
 
-@router.get("/stats", response_model=Dict[str, Any])
-async def get_product_collection_stats(
-    db: AsyncSession = Depends(get_db)
-):
-    """상품 수집 통계 조회"""
-    try:
-        from sqlalchemy import func, select
-        
-        # 전체 상품 수
-        total_result = await db.execute(select(func.count(Product.id)))
-        total_products = total_result.scalar() or 0
-        
-        # 활성 상품 수
-        active_result = await db.execute(
-            select(func.count(Product.id)).where(Product.is_active == True)
-        )
-        active_products = active_result.scalar() or 0
-        
-        # 동기화된 상품 수
-        synced_result = await db.execute(
-            select(func.count(Product.id)).where(Product.sync_status == "synced")
-        )
-        synced_products = synced_result.scalar() or 0
-        
-        # 마지막 동기화 시간
-        last_sync_result = await db.execute(
-            select(func.max(Product.last_synced_at))
-        )
-        last_sync = last_sync_result.scalar()
-        
-        return {
-            "total_collected": total_products,
-            "success_count": synced_products,
-            "failed_count": total_products - synced_products,
-            "active_count": active_products,
-            "last_collection": last_sync.isoformat() if last_sync else None
-        }
-        
-    except Exception as e:
-        logger.error(f"통계 조회 실패: {e}")
-        raise create_http_exception(ProductSyncError(f"통계 조회 실패: {str(e)}"))
-
-@router.get("/collection-history", response_model=Dict[str, Any])
-async def get_collection_history(
-    db: AsyncSession = Depends(get_db)
-):
-    """상품 수집 이력 조회"""
-    try:
-        from sqlalchemy import select, desc
-        
-        # 최근 수집 이력 조회 (최대 50개)
-        result = await db.execute(
-            select(ProductSyncHistory)
-            .order_by(desc(ProductSyncHistory.created_at))
-            .limit(50)
-        )
-        history_records = result.scalars().all()
-        
-        history = []
-        for record in history_records:
-            history.append({
-                "id": record.id,
-                "supplier_id": record.supplier_id,
-                "product_id": record.product_id,
-                "sync_type": record.sync_type,
-                "status": record.status,
-                "sync_duration_ms": record.sync_duration_ms,
-                "error_message": record.error_message,
-                "created_at": record.created_at.isoformat()
-            })
-        
-        return {
-            "history": history,
-            "total_count": len(history)
-        }
-        
-    except Exception as e:
-        logger.error(f"수집 이력 조회 실패: {e}")
-        raise create_http_exception(ProductSyncError(f"수집 이력 조회 실패: {str(e)}"))
 
 @router.get("/{product_id}", response_model=ProductResponse)
 async def get_product(
-    product_id: int,
+    product_id: str,  # String으로 변경
     db: AsyncSession = Depends(get_db)
 ):
     """특정 상품 조회"""
@@ -718,12 +619,12 @@ async def get_product(
         return ProductResponse(
             id=product.id,
             supplier_id=product.supplier_id,
-            supplier_account_id=product.supplier_account_id,
+            supplier_account_id=None,  # Product 모델에 없는 필드
             item_key=product.item_key,
-            name=product.name,
-            price=product.price,
-            sale_price=product.sale_price,
-            margin_rate=product.margin_rate,
+            name=product.title,  # title -> name으로 매핑
+            price=json.loads(product.price_data or '{}').get('original', 0) if product.price_data else 0,
+            sale_price=json.loads(product.price_data or '{}').get('sale', 0) if product.price_data else 0,
+            margin_rate=json.loads(product.price_data or '{}').get('margin_rate', 0) if product.price_data else 0,
             stock_quantity=product.stock_quantity,
             max_stock_quantity=product.max_stock_quantity,
             supplier_product_id=product.supplier_product_id,
@@ -736,11 +637,11 @@ async def get_product(
             last_synced_at=product.last_synced_at,
             sync_error_message=product.sync_error_message,
             category_id=product.category_id,
-            category_name=product.category_name,
-            coupang_product_id=product.coupang_product_id,
-            coupang_status=product.coupang_status,
-            coupang_category_id=product.coupang_category_id,
-            manufacturer=product.manufacturer,
+            category_name=None,  # Product 모델에 없는 필드
+            coupang_product_id=None,  # Product 모델에 없는 필드
+            coupang_status=None,  # Product 모델에 없는 필드
+            coupang_category_id=None,  # Product 모델에 없는 필드
+            manufacturer=None,  # Product 모델에 없는 필드
             description=product.description,
             images=json.loads(product.images) if product.images else None,
             options=json.loads(product.options) if product.options else None,
@@ -753,4 +654,154 @@ async def get_product(
     except Exception as e:
         logger.error(f"상품 조회 실패: {e}")
         raise create_http_exception(ProductSyncError(f"상품 조회 실패: {str(e)}"))
+
+@router.delete("/{product_id}")
+async def delete_product(
+    product_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """상품 삭제"""
+    try:
+        logger.info(f"상품 삭제 요청: ID={product_id}")
+        product_service = ProductService(db)
+        
+        # 상품 존재 확인
+        product = await product_service.get_product_by_id(product_id)
+        if not product:
+            raise ProductSyncError(f"상품을 찾을 수 없습니다 (ID: {product_id})")
+        
+        # 상품 삭제
+        success = await product_service.delete_product_by_id(product_id)
+        
+        if success:
+            logger.info(f"상품 삭제 완료: ID={product_id}")
+            return {"message": f"상품이 성공적으로 삭제되었습니다 (ID: {product_id})"}
+        else:
+            raise ProductSyncError(f"상품 삭제에 실패했습니다 (ID: {product_id})")
+            
+    except ProductSyncError:
+        raise
+    except Exception as e:
+        logger.error(f"상품 삭제 실패: {e}")
+        raise create_http_exception(ProductSyncError(f"상품 삭제 실패: {str(e)}"))
+
+@router.patch("/{product_id}/activate")
+async def activate_product(
+    product_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """상품 활성화"""
+    try:
+        logger.info(f"상품 활성화 요청: ID={product_id}")
+        product_service = ProductService(db)
+        
+        product = await product_service.update_product_by_id(product_id, is_active=True)
+        
+        if not product:
+            raise ProductSyncError(f"상품을 찾을 수 없습니다 (ID: {product_id})")
+        
+        logger.info(f"상품 활성화 완료: ID={product_id}")
+        return {"message": f"상품이 활성화되었습니다 (ID: {product_id})", "is_active": True}
+        
+    except ProductSyncError:
+        raise
+    except Exception as e:
+        logger.error(f"상품 활성화 실패: {e}")
+        raise create_http_exception(ProductSyncError(f"상품 활성화 실패: {str(e)}"))
+
+@router.patch("/{product_id}/deactivate")
+async def deactivate_product(
+    product_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """상품 비활성화"""
+    try:
+        logger.info(f"상품 비활성화 요청: ID={product_id}")
+        product_service = ProductService(db)
+        
+        product = await product_service.update_product_by_id(product_id, is_active=False)
+        
+        if not product:
+            raise ProductSyncError(f"상품을 찾을 수 없습니다 (ID: {product_id})")
+        
+        logger.info(f"상품 비활성화 완료: ID={product_id}")
+        return {"message": f"상품이 비활성화되었습니다 (ID: {product_id})", "is_active": False}
+        
+    except ProductSyncError:
+        raise
+    except Exception as e:
+        logger.error(f"상품 비활성화 실패: {e}")
+        raise create_http_exception(ProductSyncError(f"상품 비활성화 실패: {str(e)}"))
+
+@router.patch("/bulk/activate")
+async def bulk_activate_products(
+    product_ids: List[str],
+    db: AsyncSession = Depends(get_db)
+):
+    """대량 상품 활성화"""
+    try:
+        logger.info(f"대량 상품 활성화 요청: {len(product_ids)}개")
+        product_service = ProductService(db)
+        
+        success_count = 0
+        failed_ids = []
+        
+        for product_id in product_ids:
+            try:
+                product = await product_service.update_product_by_id(product_id, is_active=True)
+                if product:
+                    success_count += 1
+                else:
+                    failed_ids.append(product_id)
+            except Exception as e:
+                logger.error(f"상품 {product_id} 활성화 실패: {e}")
+                failed_ids.append(product_id)
+        
+        logger.info(f"대량 상품 활성화 완료: 성공={success_count}, 실패={len(failed_ids)}")
+        return {
+            "message": f"대량 상품 활성화 완료",
+            "success_count": success_count,
+            "failed_count": len(failed_ids),
+            "failed_ids": failed_ids
+        }
+        
+    except Exception as e:
+        logger.error(f"대량 상품 활성화 실패: {e}")
+        raise create_http_exception(ProductSyncError(f"대량 상품 활성화 실패: {str(e)}"))
+
+@router.patch("/bulk/deactivate")
+async def bulk_deactivate_products(
+    product_ids: List[str],
+    db: AsyncSession = Depends(get_db)
+):
+    """대량 상품 비활성화"""
+    try:
+        logger.info(f"대량 상품 비활성화 요청: {len(product_ids)}개")
+        product_service = ProductService(db)
+        
+        success_count = 0
+        failed_ids = []
+        
+        for product_id in product_ids:
+            try:
+                product = await product_service.update_product_by_id(product_id, is_active=False)
+                if product:
+                    success_count += 1
+                else:
+                    failed_ids.append(product_id)
+            except Exception as e:
+                logger.error(f"상품 {product_id} 비활성화 실패: {e}")
+                failed_ids.append(product_id)
+        
+        logger.info(f"대량 상품 비활성화 완료: 성공={success_count}, 실패={len(failed_ids)}")
+        return {
+            "message": f"대량 상품 비활성화 완료",
+            "success_count": success_count,
+            "failed_count": len(failed_ids),
+            "failed_ids": failed_ids
+        }
+        
+    except Exception as e:
+        logger.error(f"대량 상품 비활성화 실패: {e}")
+        raise create_http_exception(ProductSyncError(f"대량 상품 비활성화 실패: {str(e)}"))
 

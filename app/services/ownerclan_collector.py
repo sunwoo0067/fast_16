@@ -73,10 +73,13 @@ class OwnerClanCollector:
         """OwnerClan API에서 상품 데이터 가져오기"""
         try:
             # TokenManager를 사용하여 유효한 토큰 가져오기
+            logger.info(f"토큰 조회 시작: supplier_id={account.supplier_id}")
             token = await self.token_manager.get_valid_token(account.supplier_id)
             if not token:
                 logger.error(f"유효한 토큰을 가져올 수 없습니다: supplier_id={account.supplier_id}")
                 return []
+            else:
+                logger.info(f"토큰 획득 성공: {token[:50]}...")
 
             # REST API 시도
             try:
@@ -88,7 +91,9 @@ class OwnerClanCollector:
 
             # GraphQL API 시도
             try:
+                logger.info(f"GraphQL API 호출 시작: limit={limit}")
                 products_data = await self._fetch_products_graphql_api(token, limit)
+                logger.info(f"GraphQL API 응답: {len(products_data) if products_data else 0}개 상품")
                 if products_data:
                     return products_data
             except Exception as e:
@@ -171,8 +176,8 @@ class OwnerClanCollector:
     async def _fetch_products_graphql_api(self, token: str, limit: int) -> List[Dict[str, Any]]:
         """GraphQL API로 상품 데이터 가져오기"""
         query = """
-        query GetProducts($first: Int!, $offset: Int!) {
-            allItems(first: $first, offset: $offset) {
+        query GetProducts($first: Int!) {
+            allItems(first: $first) {
                 edges {
                     node {
                         id
@@ -180,51 +185,63 @@ class OwnerClanCollector:
                         name
                         model
                         price
-                        salePrice
+                        fixedPrice
+                        wholessalePrice
                         boxQuantity
                         category {
                             id
                             name
                         }
-                        description
                         images
-                        options
+                        options {
+                            key
+                        }
                     }
                 }
             }
         }
         """
 
-        variables = {"first": limit, "offset": 0}
+        variables = {"first": limit}
 
         response = await self.api.execute_query(query, variables, token)
+        
+        # 응답 타입 확인
+        logger.info(f"GraphQL 응답 타입: {type(response)}")
+        logger.info(f"GraphQL 응답 내용: {response}")
 
-        if response.get("success") and response.get("data"):
+        # GraphQL 응답 구조 확인 (success 필드가 없을 수 있음)
+        if isinstance(response, dict) and response.get("data") and not response.get("errors"):
             # allItems는 edges 구조를 사용
             all_items = response["data"].get("allItems", {})
             edges = all_items.get("edges", [])
             products = [edge["node"] for edge in edges]
             
+            logger.info(f"GraphQL API에서 {len(products)}개 상품 조회 성공")
+            
             return [
                 {
+                    "id": f"OC_{product['key'] or product['id']}",  # 필수 필드
                     "item_key": f"OC_{product['key'] or product['id']}",
-                    "name": product["name"],
-                    "price": product.get("price", 0),
-                    "sale_price": product.get("salePrice"),
+                    "title": product["name"],  # name -> title로 변경
+                    "brand": "OwnerClan",  # 기본 브랜드
                     "stock_quantity": product.get("boxQuantity", 0),
                     "category_id": product.get("category", {}).get("id"),
-                    "category_name": product.get("category", {}).get("name"),
-                    "description": product.get("description", ""),
-                    "images": product.get("images", []),
-                    "options": product.get("options", {}),
-                    "is_active": True,  # 기본값으로 설정
+                    "description": "",  # description 필드가 없으므로 빈 문자열
+                    "images": json.dumps(product.get("images", [])),  # JSON 문자열로 저장
+                    "options": json.dumps(product.get("options", [])),  # JSON 문자열로 저장 (배열)
+                    "price_data": json.dumps({  # 가격 정보를 JSON으로 저장
+                        "original": product.get("price", 0),
+                        "sale": product.get("fixedPrice", product.get("price", 0)),
+                        "wholesale": product.get("wholessalePrice", product.get("price", 0)),
+                        "margin_rate": 0.3
+                    }),
+                    "is_active": True,
                     "supplier_product_id": str(product.get("key") or product["id"]),
                     "supplier_name": "OwnerClan",
                     "supplier_url": f"https://ownerclan.com/product/{product.get('key') or product['id']}",
-                    "supplier_image_url": product.get("images", [{}])[0].get("url") if product.get("images") else None,
+                    "supplier_image_url": product.get("images", [None])[0] if product.get("images") else None,
                     "estimated_shipping_days": 3,
-                    "manufacturer": "OwnerClan",
-                    "margin_rate": 0.3,
                     "sync_status": "synced"
                 }
                 for product in products
@@ -240,11 +257,11 @@ class OwnerClanCollector:
 
         for product_data in products_data:
             try:
-                # 기존 상품 확인
+                # 기존 상품 확인 (supplier_account_id를 supplier_id로 사용)
                 existing_product = await self.db.execute(
                     select(Product).where(
                         and_(
-                            Product.supplier_id == supplier_account_id,
+                            Product.supplier_id == str(supplier_account_id),  # String으로 변환
                             Product.supplier_product_id == product_data["supplier_product_id"]
                         )
                     )
@@ -260,10 +277,9 @@ class OwnerClanCollector:
                     existing.sync_status = "synced"
                 else:
                     # 새 상품 생성
-                    new_product = Product(
-                        supplier_id=supplier_account_id,
-                        **product_data
-                    )
+                    product_data_copy = product_data.copy()
+                    product_data_copy["supplier_id"] = str(supplier_account_id)  # String으로 변환
+                    new_product = Product(**product_data_copy)
                     self.db.add(new_product)
 
                 saved_count += 1

@@ -39,14 +39,14 @@ class ProductService(LoggerMixin):
         if sync_status is not None:
             query = query.where(Product.sync_status == sync_status)
         if search:
-            # 상품명 검색
-            query = query.where(Product.name.contains(search))
+            # 상품명 검색 (title 필드 사용)
+            query = query.where(Product.title.contains(search))
 
         query = query.offset(offset).limit(limit)
         result = await self.db.execute(query)
         return result.scalars().all()
 
-    async def get_product_by_id(self, product_id: int) -> Optional[Product]:
+    async def get_product_by_id(self, product_id: str) -> Optional[Product]:  # String으로 변경
         """ID로 상품 조회"""
         result = await self.db.execute(
             select(Product).where(Product.id == product_id)
@@ -183,7 +183,7 @@ class ProductService(LoggerMixin):
 
     async def update_product(
         self,
-        product_id: int,
+        product_id: str,  # String으로 변경
         **kwargs
     ) -> Optional[Product]:
         """상품 정보 수정"""
@@ -193,9 +193,8 @@ class ProductService(LoggerMixin):
 
         # 이전 데이터 백업
         old_data = {
-            "name": product.name,
-            "price": product.price,
-            "sale_price": product.sale_price,
+            "title": product.title,  # name -> title로 변경
+            "price_data": product.price_data,
             "stock_quantity": product.stock_quantity
         }
 
@@ -216,27 +215,76 @@ class ProductService(LoggerMixin):
         # 업데이트된 상품 조회
         await self.db.refresh(product)
 
-        # 동기화 이력 기록
-        await self._record_sync_history(
-            supplier_id=product.supplier_id,
-            product_id=product_id,
-            sync_type="update",
-            status="success",
-            old_data=old_data
-        )
+        # 동기화 이력 기록 (product_id가 숫자가 아닌 경우 건너뛰기)
+        if product_id.isdigit():
+            await self._record_sync_history(
+                supplier_id=product.supplier_id,
+                product_id=product_id,
+                sync_type="update",
+                status="success",
+                old_data=old_data
+            )
 
         log_product_sync(
             product_data={
                 "item_key": product.item_key,
-                "name": product.name,
+                "title": product.title,  # name -> title로 변경
                 "supplier_id": product.supplier_id
             },
             action="update",
             success=True
         )
 
-        self.logger.info(f"상품 수정 완료: {product.name} ({product.item_key})")
+        self.logger.info(f"상품 수정 완료: {product.title} ({product.item_key})")
         return product
+
+    async def update_product_by_id(
+        self,
+        product_id: str,
+        **kwargs
+    ) -> Optional[Product]:
+        """ID로 상품 정보 수정 (간편 버전)"""
+        return await self.update_product(product_id, **kwargs)
+
+    async def delete_product_by_id(self, product_id: str) -> bool:
+        """ID로 상품 삭제"""
+        try:
+            # 상품 존재 확인
+            product = await self.get_product_by_id(product_id)
+            if not product:
+                return False
+
+            # 삭제 실행
+            await self.db.execute(
+                delete(Product).where(Product.id == product_id)
+            )
+            await self.db.commit()
+
+            # 삭제 이력 기록 (product_id가 숫자가 아닌 경우 건너뛰기)
+            if product_id.isdigit():
+                await self._record_sync_history(
+                    supplier_id=product.supplier_id,
+                    product_id=product_id,
+                    sync_type="delete",
+                    status="success"
+                )
+
+            log_product_sync(
+                product_data={
+                    "item_key": product.item_key,
+                    "title": product.title,
+                    "supplier_id": product.supplier_id
+                },
+                action="delete",
+                success=True
+            )
+
+            self.logger.info(f"상품 삭제 완료: {product.title} ({product.item_key})")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"상품 삭제 실패: {e}")
+            return False
 
     async def get_product_stats(self, supplier_id: int) -> Dict[str, Any]:
         """공급사의 상품 통계 조회"""
@@ -340,8 +388,8 @@ class ProductService(LoggerMixin):
 
     async def _record_sync_history(
         self,
-        supplier_id: int,
-        product_id: int,
+        supplier_id: str,  # String으로 변경
+        product_id: str,   # String으로 변경
         sync_type: str,
         status: str,
         old_data: Optional[Dict] = None,
@@ -351,8 +399,8 @@ class ProductService(LoggerMixin):
     ):
         """동기화 이력 기록"""
         history_record = ProductSyncHistory(
-            supplier_id=supplier_id,
-            product_id=product_id,
+            supplier_id=int(supplier_id) if supplier_id else None,  # String을 int로 변환
+            product_id=int(product_id) if product_id and product_id.isdigit() else None,  # String을 int로 변환 (숫자인 경우만)
             sync_type=sync_type,
             status=status,
             old_data=json.dumps(old_data) if old_data else None,

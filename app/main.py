@@ -45,11 +45,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# WebSocket을 위한 추가 설정
+@app.middleware("http")
+async def websocket_cors_middleware(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/v1/ws/"):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
+
 # API 라우터 등록
 app.include_router(
     api_router,
     prefix=settings.api_prefix
 )
+
+# WebSocket 엔드포인트는 별도 라우터에서 처리
 
 # 기본 헬스체크 엔드포인트
 @app.get("/")

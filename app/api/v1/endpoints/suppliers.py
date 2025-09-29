@@ -219,15 +219,21 @@ async def get_supplier_accounts(
             "accounts": [
                 {
                     "id": account.id,
-                    "account_id": account.account_id,
+                    "supplier_id": account.supplier_id,
+                    "account_name": account.account_name,
+                    "username": account.username,
                     "is_active": account.is_active,
-                    "token_expires_at": account.token_expires_at.isoformat() if account.token_expires_at else None,
-                    "last_used_at": account.last_used_at.isoformat() if account.last_used_at else None,
                     "usage_count": account.usage_count,
+                    "total_requests": account.total_requests,
+                    "successful_requests": account.successful_requests,
+                    "failed_requests": account.failed_requests,
+                    "success_rate": account.success_rate,
                     "default_margin_rate": account.default_margin_rate,
                     "sync_enabled": account.sync_enabled,
+                    "last_used_at": account.last_used_at.isoformat() if account.last_used_at else None,
                     "last_sync_at": account.last_sync_at.isoformat() if account.last_sync_at else None,
-                    "coupang_vendor_id": account.coupang_vendor_id
+                    "created_at": account.created_at.isoformat(),
+                    "updated_at": account.updated_at.isoformat()
                 }
                 for account in accounts
             ]
@@ -238,4 +244,148 @@ async def get_supplier_accounts(
     except Exception as e:
         logger.error(f"공급사 계정 목록 조회 실패: {e}")
         raise create_http_exception(SupplierError(f"공급사 계정 목록 조회 실패: {str(e)}"))
+
+# 공급사 계정 관련 모델들
+class SupplierAccountCreate(BaseModel):
+    account_name: str = Field(..., min_length=1, max_length=100)
+    username: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=1)
+    default_margin_rate: Optional[float] = Field(0.3, ge=0.0, le=1.0)
+    is_active: Optional[bool] = True
+    sync_enabled: Optional[bool] = True
+
+class SupplierAccountUpdate(BaseModel):
+    account_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    username: Optional[str] = Field(None, min_length=1, max_length=100)
+    password: Optional[str] = Field(None, min_length=1)
+    default_margin_rate: Optional[float] = Field(None, ge=0.0, le=1.0)
+    is_active: Optional[bool] = None
+    sync_enabled: Optional[bool] = None
+
+class SupplierAccountResponse(BaseModel):
+    id: int
+    supplier_id: int
+    account_name: str
+    username: str
+    is_active: bool
+    usage_count: int
+    total_requests: int
+    successful_requests: int
+    failed_requests: int
+    success_rate: float
+    default_margin_rate: float
+    sync_enabled: bool
+    last_used_at: Optional[datetime]
+    last_sync_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+@router.post("/{supplier_id}/accounts", response_model=SupplierAccountResponse, status_code=status.HTTP_201_CREATED)
+async def create_supplier_account(
+    supplier_id: int,
+    account_data: SupplierAccountCreate,
+    db: AsyncSession = Depends(get_db)
+):
+    """공급사 계정 생성"""
+    try:
+        logger.info(f"공급사 계정 생성 요청: supplier_id={supplier_id}, account_name={account_data.account_name}")
+        supplier_service = SupplierService(db)
+
+        # 공급사 존재 확인
+        supplier = await supplier_service.get_supplier_by_id(supplier_id)
+        if not supplier:
+            raise SupplierError(f"공급사를 찾을 수 없습니다 (ID: {supplier_id})")
+
+        account = await supplier_service.create_supplier_account(
+            supplier_id=supplier_id,
+            account_name=account_data.account_name,
+            username=account_data.username,
+            password=account_data.password,
+            default_margin_rate=account_data.default_margin_rate,
+            is_active=account_data.is_active,
+            sync_enabled=account_data.sync_enabled
+        )
+
+        logger.info(f"공급사 계정 생성 완료: ID={account.id}")
+        return SupplierAccountResponse(
+            id=account.id,
+            supplier_id=account.supplier_id,
+            account_name=account.account_name,
+            username=account.username,
+            is_active=account.is_active,
+            usage_count=account.usage_count,
+            total_requests=account.total_requests,
+            successful_requests=account.successful_requests,
+            failed_requests=account.failed_requests,
+            success_rate=account.success_rate,
+            default_margin_rate=account.default_margin_rate,
+            sync_enabled=account.sync_enabled,
+            last_used_at=account.last_used_at,
+            last_sync_at=account.last_sync_at,
+            created_at=account.created_at,
+            updated_at=account.updated_at
+        )
+
+    except SupplierError:
+        raise
+    except Exception as e:
+        logger.error(f"공급사 계정 생성 실패: {e}")
+        raise create_http_exception(SupplierError(f"공급사 계정 생성 실패: {str(e)}"))
+
+@router.put("/{supplier_id}/accounts/{account_id}", response_model=SupplierAccountResponse)
+async def update_supplier_account(
+    supplier_id: int,
+    account_id: int,
+    account_data: SupplierAccountUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    """공급사 계정 수정"""
+    try:
+        logger.info(f"공급사 계정 수정 요청: supplier_id={supplier_id}, account_id={account_id}")
+        supplier_service = SupplierService(db)
+
+        # 공급사 존재 확인
+        supplier = await supplier_service.get_supplier_by_id(supplier_id)
+        if not supplier:
+            raise SupplierError(f"공급사를 찾을 수 없습니다 (ID: {supplier_id})")
+
+        account = await supplier_service.update_supplier_account(
+            supplier_id=supplier_id,
+            account_id=account_id,
+            account_name=account_data.account_name,
+            username=account_data.username,
+            password=account_data.password,
+            default_margin_rate=account_data.default_margin_rate,
+            is_active=account_data.is_active,
+            sync_enabled=account_data.sync_enabled
+        )
+
+        if not account:
+            raise SupplierError(f"공급사 계정을 찾을 수 없습니다 (ID: {account_id})")
+
+        logger.info(f"공급사 계정 수정 완료: ID={account_id}")
+        return SupplierAccountResponse(
+            id=account.id,
+            supplier_id=account.supplier_id,
+            account_name=account.account_name,
+            username=account.username,
+            is_active=account.is_active,
+            usage_count=account.usage_count,
+            total_requests=account.total_requests,
+            successful_requests=account.successful_requests,
+            failed_requests=account.failed_requests,
+            success_rate=account.success_rate,
+            default_margin_rate=account.default_margin_rate,
+            sync_enabled=account.sync_enabled,
+            last_used_at=account.last_used_at,
+            last_sync_at=account.last_sync_at,
+            created_at=account.created_at,
+            updated_at=account.updated_at
+        )
+
+    except SupplierError:
+        raise
+    except Exception as e:
+        logger.error(f"공급사 계정 수정 실패: {e}")
+        raise create_http_exception(SupplierError(f"공급사 계정 수정 실패: {str(e)}"))
 
