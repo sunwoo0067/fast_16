@@ -70,7 +70,7 @@ class ApiClient {
   }
 
   async syncProducts(request: ProductSyncRequest): Promise<ProductSyncResponse> {
-    const response = await this.client.post('/products/ingest', request);
+    const response = await this.client.post('/products/collect', request);
     return response.data;
   }
 
@@ -171,6 +171,11 @@ class ApiClient {
     return response.data;
   }
 
+  async updateSupplierAccount(supplierId: number, accountId: number, accountData: Partial<SupplierAccount>): Promise<SupplierAccount> {
+    const response = await this.client.put(`/suppliers/${supplierId}/accounts/${accountId}`, accountData);
+    return response.data;
+  }
+
   async testSupplierConnection(request: SupplierTestRequest): Promise<ApiResponse> {
     const response = await this.client.post('/suppliers/test-connection', request);
     return response.data;
@@ -196,7 +201,7 @@ class ApiClient {
       }
     });
 
-    const response = await this.client.get(`/sync-history?${params}`);
+    const response = await this.client.get(`/dashboard/sync-history?${params}`);
     return response.data;
   }
 
@@ -205,6 +210,67 @@ class ApiClient {
     const response = await this.client.get('/dashboard/stats');
     return response.data;
   }
+
+  // 동기화 관련 API
+  async getSyncHistory(filters: any = {}): Promise<any> {
+    const params = new URLSearchParams();
+
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        params.append(key, value.toString());
+      }
+    });
+
+    const response = await this.client.get(`/dashboard/sync-history?${params}`);
+    return response.data;
+  }
+
+  async getSyncStats(): Promise<any> {
+    const response = await this.client.get('/dashboard/sync-history/stats');
+    return response.data;
+  }
+
+  async retrySync(recordId: string): Promise<any> {
+    const response = await this.client.post(`/dashboard/sync-history/${recordId}/retry`);
+    return response.data;
+  }
+
+  async cancelSync(recordId: string): Promise<any> {
+    const response = await this.client.post(`/dashboard/sync-history/${recordId}/cancel`);
+    return response.data;
+  }
+
+  // 공급사 동기화 관련 API
+  async syncSupplierProducts(supplierId: string, accountId?: string, dateFilter?: string): Promise<any> {
+    const requestData: any = {
+      supplier_id: supplierId,
+      account_id: accountId
+    };
+
+    // 날짜 필터가 있고 'all'이 아닌 경우 추가
+    if (dateFilter && dateFilter !== 'all') {
+      requestData.date_filter = dateFilter;
+    }
+
+    const response = await this.client.post('/products/collect', requestData);
+    return response.data;
+  }
+
+  async syncAllSuppliers(): Promise<any> {
+    const response = await this.client.post('/products/collect/all');
+    return response.data;
+  }
+
+  // OwnerClan API
+  async collectOwnerClanProducts(request: {
+    supplier_id: number;
+    supplier_account_id: number;
+    count: number;
+  }): Promise<any> {
+    const response = await this.client.post('/ownerclan/collect-products', request);
+    return response.data;
+  }
+
 }
 
 // 싱글톤 인스턴스

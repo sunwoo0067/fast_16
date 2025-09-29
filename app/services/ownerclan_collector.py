@@ -8,7 +8,7 @@ from sqlalchemy import select, and_
 
 from app.models.database import Supplier, SupplierAccount, Product
 from app.core.logging import get_logger
-from ownerclan_api import OwnerClanAPI
+from ownerclan_api import OwnerClanAPI, TokenManager
 from ownerclan_credentials import OwnerClanCredentials
 
 logger = get_logger(__name__)
@@ -19,6 +19,7 @@ class OwnerClanCollector:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.api = OwnerClanAPI()
+        self.token_manager = TokenManager(db, self.api)
 
     async def collect_products(self, supplier_account_id: int, limit: int = 100) -> Dict[str, Any]:
         """OwnerClan에서 상품 데이터 수집"""
@@ -32,10 +33,14 @@ class OwnerClanCollector:
             products_data = await self._fetch_products_from_ownerclan(account, limit)
 
             if not products_data:
-                # 더미 데이터라도 수집된 것으로 처리
-                products_data = self._get_dummy_products(limit)
-                if products_data:
-                    logger.info(f"API 실패로 더미 데이터 {len(products_data)}개 사용")
+                logger.warning("OwnerClan API에서 상품 데이터를 가져오지 못했습니다")
+                return {
+                    "success": False,
+                    "error": "OwnerClan API에서 상품 데이터를 가져올 수 없습니다",
+                    "collected": 0,
+                    "saved": 0,
+                    "supplier_account_id": supplier_account_id
+                }
 
             # 수집된 데이터를 데이터베이스에 저장
             saved_count = await self._save_products_to_db(products_data, supplier_account_id)
@@ -49,15 +54,12 @@ class OwnerClanCollector:
 
         except Exception as e:
             logger.error(f"상품 수집 실패: {e}")
-            # 예외 발생 시에도 더미 데이터로 폴백
-            dummy_products = self._get_dummy_products(limit)
-            saved_count = await self._save_products_to_db(dummy_products, supplier_account_id)
             return {
-                "success": True,
-                "collected": len(dummy_products),
-                "saved": saved_count,
-                "supplier_account_id": supplier_account_id,
-                "error": str(e)
+                "success": False,
+                "error": f"상품 수집 중 오류 발생: {str(e)}",
+                "collected": 0,
+                "saved": 0,
+                "supplier_account_id": supplier_account_id
             }
 
     async def _get_supplier_account(self, account_id: int) -> Optional[SupplierAccount]:
@@ -70,51 +72,35 @@ class OwnerClanCollector:
     async def _fetch_products_from_ownerclan(self, account: SupplierAccount, limit: int) -> List[Dict[str, Any]]:
         """OwnerClan API에서 상품 데이터 가져오기"""
         try:
-            # OwnerClan 인증 정보 가져오기
-            credentials = OwnerClanCredentials.get_api_config()
+            # TokenManager를 사용하여 유효한 토큰 가져오기
+            token = await self.token_manager.get_valid_token(account.supplier_id)
+            if not token:
+                logger.error(f"유효한 토큰을 가져올 수 없습니다: supplier_id={account.supplier_id}")
+                return []
 
-            async with self.api:
-                # OwnerClan API 인증 (토큰이 있으면 사용, 없으면 재인증)
-                token = account.access_token
-                if not token or await self._is_token_expired(account):
-                    logger.info("토큰 갱신 필요, 재인증 시도")
-                    auth_result = await self.api.authenticate(
-                        credentials["account_id"],
-                        credentials["password"]
-                    )
-                    if auth_result.get("success"):
-                        token = auth_result["access_token"]
-                        # 토큰 정보를 데이터베이스에 업데이트
-                        await self._update_account_token(account.id, token)
-                    else:
-                        logger.error(f"OwnerClan 인증 실패: {auth_result}")
-                        # 실제 API가 작동하지 않을 경우 더미 데이터 반환
-                        return self._get_dummy_products(limit)
+            # REST API 시도
+            try:
+                products_data = await self._fetch_products_rest_api(token, limit)
+                if products_data:
+                    return products_data
+            except Exception as e:
+                logger.warning(f"REST API 실패, GraphQL 시도: {e}")
 
-                # REST API 시도
-                try:
-                    products_data = await self._fetch_products_rest_api(token, limit)
-                    if products_data:
-                        return products_data
-                except Exception as e:
-                    logger.warning(f"REST API 실패, GraphQL 시도: {e}")
+            # GraphQL API 시도
+            try:
+                products_data = await self._fetch_products_graphql_api(token, limit)
+                if products_data:
+                    return products_data
+            except Exception as e:
+                logger.warning(f"GraphQL API 실패: {e}")
 
-                # GraphQL API 시도
-                try:
-                    products_data = await self._fetch_products_graphql_api(token, limit)
-                    if products_data:
-                        return products_data
-                except Exception as e:
-                    logger.warning(f"GraphQL API 실패: {e}")
-
-                # 모든 API 시도가 실패한 경우 더미 데이터 반환
-                logger.warning("모든 OwnerClan API 호출 실패, 더미 데이터 사용")
-                dummy_products = self._get_dummy_products(limit)
-                return dummy_products
+            # 모든 API 시도가 실패한 경우 빈 리스트 반환
+            logger.warning("모든 OwnerClan API 호출 실패")
+            return []
 
         except Exception as e:
             logger.error(f"OwnerClan 상품 데이터 수집 실패: {e}")
-            return self._get_dummy_products(limit)
+            return []
 
     async def _fetch_products_rest_api(self, token: str, limit: int) -> List[Dict[str, Any]]:
         """REST API로 상품 데이터 가져오기"""
@@ -185,50 +171,56 @@ class OwnerClanCollector:
     async def _fetch_products_graphql_api(self, token: str, limit: int) -> List[Dict[str, Any]]:
         """GraphQL API로 상품 데이터 가져오기"""
         query = """
-        query GetProducts($limit: Int!, $offset: Int!) {
-            products(limit: $limit, offset: $offset) {
-                items {
-                    id
-                    name
-                    price
-                    salePrice
-                    stockQuantity
-                    category {
+        query GetProducts($first: Int!, $offset: Int!) {
+            allItems(first: $first, offset: $offset) {
+                edges {
+                    node {
                         id
+                        key
                         name
+                        model
+                        price
+                        salePrice
+                        boxQuantity
+                        category {
+                            id
+                            name
+                        }
+                        description
+                        images
+                        options
                     }
-                    description
-                    images
-                    options
-                    isActive
                 }
-                totalCount
             }
         }
         """
 
-        variables = {"limit": limit, "offset": 0}
+        variables = {"first": limit, "offset": 0}
 
         response = await self.api.execute_query(query, variables, token)
 
         if response.get("success") and response.get("data"):
-            products = response["data"].get("products", {}).get("items", [])
+            # allItems는 edges 구조를 사용
+            all_items = response["data"].get("allItems", {})
+            edges = all_items.get("edges", [])
+            products = [edge["node"] for edge in edges]
+            
             return [
                 {
-                    "item_key": f"OC_{product['id']}",
+                    "item_key": f"OC_{product['key'] or product['id']}",
                     "name": product["name"],
                     "price": product.get("price", 0),
                     "sale_price": product.get("salePrice"),
-                    "stock_quantity": product.get("stockQuantity", 0),
+                    "stock_quantity": product.get("boxQuantity", 0),
                     "category_id": product.get("category", {}).get("id"),
                     "category_name": product.get("category", {}).get("name"),
                     "description": product.get("description", ""),
                     "images": product.get("images", []),
                     "options": product.get("options", {}),
-                    "is_active": product.get("isActive", True),
-                    "supplier_product_id": str(product["id"]),
+                    "is_active": True,  # 기본값으로 설정
+                    "supplier_product_id": str(product.get("key") or product["id"]),
                     "supplier_name": "OwnerClan",
-                    "supplier_url": f"https://ownerclan.com/product/{product['id']}",
+                    "supplier_url": f"https://ownerclan.com/product/{product.get('key') or product['id']}",
                     "supplier_image_url": product.get("images", [{}])[0].get("url") if product.get("images") else None,
                     "estimated_shipping_days": 3,
                     "manufacturer": "OwnerClan",
@@ -240,59 +232,7 @@ class OwnerClanCollector:
 
         return []
 
-    def _get_dummy_products(self, limit: int) -> List[Dict[str, Any]]:
-        """더미 상품 데이터 생성 (API 실패 시)"""
-        categories = ["전자제품", "의류", "도서", "스포츠", "뷰티", "식품"]
-        products = []
 
-        for i in range(min(limit, 20)):  # 최대 20개 더미 데이터
-            category = categories[i % len(categories)]
-            base_price = (i + 1) * 1000
-
-            import json
-
-            products.append({
-                "item_key": f"OC_DUMMY_{i+1}",
-                "name": f"{category} 더미상품 {i+1}",
-                "price": base_price,
-                "sale_price": int(base_price * 1.2),
-                "stock_quantity": 50 + i * 5,
-                "category_id": f"CAT_{i%5 + 1}",
-                "category_name": category,
-                "description": f"이것은 더미 상품 {i+1}입니다. {category} 카테고리의 테스트 상품입니다.",
-                "images": json.dumps([f"https://dummyimage.com/300x300/000/fff&text=상품{i+1}"]),
-                "options": json.dumps({"색상": ["블랙", "화이트"], "사이즈": ["S", "M", "L"]}),
-                "is_active": True,
-                "supplier_product_id": f"DUMMY_{i+1}",
-                "supplier_name": "OwnerClan",
-                "supplier_url": f"https://ownerclan.com/product/dummy_{i+1}",
-                "supplier_image_url": f"https://dummyimage.com/300x300/000/fff&text=상품{i+1}",
-                "estimated_shipping_days": 3,
-                "manufacturer": "OwnerClan",
-                "margin_rate": 0.3,
-                "sync_status": "synced"
-            })
-
-        return products
-
-    async def _is_token_expired(self, account: SupplierAccount) -> bool:
-        """토큰 만료 여부 확인"""
-        if not account.token_expires_at:
-            return True
-        return datetime.now() > account.token_expires_at
-
-    async def _update_account_token(self, account_id: int, token: str):
-        """계정 토큰 정보 업데이트"""
-        from sqlalchemy import update
-        await self.db.execute(
-            update(SupplierAccount)
-            .where(SupplierAccount.id == account_id)
-            .values(
-                access_token=token,
-                token_expires_at=datetime.now() + timedelta(hours=24)
-            )
-        )
-        await self.db.commit()
 
     async def _save_products_to_db(self, products_data: List[Dict[str, Any]], supplier_account_id: int) -> int:
         """수집된 상품 데이터를 데이터베이스에 저장"""

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
-import { DashboardStats, Product, Order, Supplier, SyncHistory } from '@/types';
+import { DashboardStats, Product, Order, SyncHistory } from '@/types';
 import apiClient from '@/services/api';
 
 interface DashboardState {
@@ -22,7 +22,7 @@ interface DashboardState {
 
 export const useDashboardStore = create<DashboardState>()(
   devtools(
-    (set, get) => ({
+    (set) => ({
       // 초기 상태
       stats: null,
       recentProducts: [],
@@ -74,7 +74,11 @@ export const useDashboardStore = create<DashboardState>()(
       fetchRecentSyncs: async () => {
         set({ loading: true, error: null });
         try {
-          const syncs = await apiClient.getSyncHistory({ limit: 10 });
+          const response = await apiClient.getSyncHistory({ limit: 10 });
+          // API 응답에서 syncs 배열 추출 (response가 객체인 경우)
+          const syncs = response && typeof response === 'object' && 'syncs' in response
+            ? (response as { syncs: SyncHistory[] }).syncs
+            : Array.isArray(response) ? response as SyncHistory[] : [];
           set({ recentSyncs: syncs, loading: false });
         } catch (error: any) {
           set({

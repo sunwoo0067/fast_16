@@ -2,7 +2,8 @@ import React, { useEffect } from 'react';
 import { Card, Row, Col, Statistic, Table, Spin, Alert } from 'antd';
 import { ShoppingCartOutlined, ProductOutlined, SyncOutlined, DollarOutlined } from '@ant-design/icons';
 import { useDashboardStore } from '@/stores/dashboard';
-import { Product, Order, SyncHistory } from '@/types';
+import { SyncHistory } from '@/types';
+// import MonitoringDashboard from './MonitoringDashboard';
 
 const Dashboard: React.FC = () => {
   const {
@@ -160,6 +161,9 @@ const Dashboard: React.FC = () => {
         드랍십핑 자동화 대시보드
       </h1>
 
+      {/* 실시간 모니터링 대시보드 */}
+      {/* <MonitoringDashboard /> */}
+
       {/* 통계 카드 */}
       <Row gutter={16} style={{ marginBottom: '24px' }}>
         <Col xs={24} sm={12} lg={6}>
@@ -220,7 +224,7 @@ const Dashboard: React.FC = () => {
             ) : (
               <Table
                 columns={productColumns}
-                dataSource={recentProducts.slice(0, 5)}
+                dataSource={recentProducts?.slice(0, 5) || []}
                 pagination={false}
                 size="small"
                 rowKey="id"
@@ -244,7 +248,7 @@ const Dashboard: React.FC = () => {
             ) : (
               <Table
                 columns={orderColumns}
-                dataSource={recentOrders.slice(0, 5)}
+                dataSource={recentOrders?.slice(0, 5) || []}
                 pagination={false}
                 size="small"
                 rowKey="id"
@@ -268,7 +272,7 @@ const Dashboard: React.FC = () => {
             ) : (
               <Table
                 columns={syncColumns}
-                dataSource={recentSyncs.slice(0, 5)}
+                dataSource={recentSyncs?.slice(0, 5) || []}
                 pagination={false}
                 size="small"
                 rowKey="id"

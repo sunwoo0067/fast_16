@@ -408,6 +408,25 @@ class ProductSyncService(LoggerMixin):
 
         return results
 
+    async def get_active_suppliers(self) -> List[Dict[str, Any]]:
+        """활성 공급사 목록 조회"""
+        from app.models.database import Supplier
+        
+        query = select(Supplier).where(Supplier.is_active == True)
+        result = await self.db.execute(query)
+        suppliers = result.scalars().all()
+        
+        return [
+            {
+                "id": supplier.id,
+                "name": supplier.name,
+                "description": supplier.description,
+                "api_key": supplier.api_key,
+                "base_url": supplier.base_url
+            }
+            for supplier in suppliers
+        ]
+
     async def collect_products(
         self,
         supplier_id: int,
@@ -416,20 +435,21 @@ class ProductSyncService(LoggerMixin):
         force_sync: bool = False
     ) -> Dict[str, Any]:
         """상품 수집 (OwnerClan API 연동)"""
-        from app.services.sync_service import ProductSyncService
-
         try:
-            sync_service = ProductSyncService(self.db)
-            result = await sync_service.sync_supplier_products(
+            # OwnerClanCollector를 사용하여 상품 수집
+            from app.services.ownerclan_collector import OwnerClanCollector
+            
+            collector = OwnerClanCollector(self.db)
+            result = await collector.collect_products(
                 supplier_id=supplier_id,
                 supplier_account_id=supplier_account_id,
-                item_keys=item_keys,
-                force_sync=force_sync
+                count=50  # 기본 수집 개수
             )
-
+            
             return result
-
+            
         except Exception as e:
+            self.logger.error(f"상품 수집 실패: {e}")
             return {
                 "total_products": 0,
                 "new_products": 0,
@@ -437,4 +457,5 @@ class ProductSyncService(LoggerMixin):
                 "errors": [str(e)],
                 "duration_ms": 0
             }
+
 

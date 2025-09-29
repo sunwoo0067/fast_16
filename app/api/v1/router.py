@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import suppliers, products, auth, orders, categories, coupang, tasks, ownerclan
+from app.api.v1.endpoints import suppliers, products, auth, orders, categories, coupang, tasks, ownerclan, websocket, progress, dashboard
 
 # 메인 API 라우터
 api_router = APIRouter()
@@ -51,5 +51,23 @@ api_router.include_router(
     ownerclan.router,
     prefix="/ownerclan",
     tags=["ownerclan"]
+)
+
+api_router.include_router(
+    websocket.router,
+    prefix="/ws",
+    tags=["websocket"]
+)
+
+api_router.include_router(
+    progress.router,
+    prefix="/progress",
+    tags=["progress"]
+)
+
+api_router.include_router(
+    dashboard.router,
+    prefix="/dashboard",
+    tags=["dashboard"]
 )
 

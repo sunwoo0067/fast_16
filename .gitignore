@@ -46,3 +46,4 @@ ownerclan_credentials.py
 *.log
 logs/
 test_ownerclan_api.py
+frontend/node_modules/

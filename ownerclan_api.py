@@ -1158,8 +1158,8 @@ class TokenManager:
         try:
             # 새로운 토큰 발급
             auth_response = await self.ownerclan_api.authenticate(
-                account.account_id,
-                account.account_password
+                account.username,
+                account.password_encrypted
             )
 
             # 토큰 정보 업데이트
@@ -1249,8 +1249,9 @@ class TokenManager:
 
             new_account = SupplierAccount(
                 supplier_id=supplier_id,
-                account_id=account_id,
-                account_password=password,
+                account_name=f"OwnerClan Account {supplier_id}",
+                username=account_id,
+                password_encrypted=password,
                 access_token=auth_response.get("access_token"),
                 refresh_token=auth_response.get("refresh_token"),
                 token_expires_at=datetime.now() + timedelta(days=30),

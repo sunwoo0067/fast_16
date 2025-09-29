@@ -88,8 +88,9 @@ class SupplierAccountService:
 
             new_account = SupplierAccount(
                 supplier_id=supplier_id,
-                account_id=account_id,
-                account_password=password,
+                account_name=f"OwnerClan Account {supplier_id}",
+                username=account_id,
+                password_encrypted=password,
                 access_token=access_token,
                 refresh_token=refresh_token,
                 token_expires_at=datetime.now() + timedelta(days=30) if access_token else None,

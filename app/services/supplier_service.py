@@ -150,3 +150,100 @@ class SupplierService(LoggerMixin):
         )
         return result.scalars().all()
 
+    async def create_supplier_account(
+        self,
+        supplier_id: int,
+        account_name: str,
+        username: str,
+        password: str,
+        default_margin_rate: float = 0.3,
+        is_active: bool = True,
+        sync_enabled: bool = True
+    ) -> SupplierAccount:
+        """공급사 계정 생성"""
+        # 중복 계정명 체크
+        existing = await self.db.execute(
+            select(SupplierAccount).where(
+                and_(
+                    SupplierAccount.supplier_id == supplier_id,
+                    SupplierAccount.account_name == account_name
+                )
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise SupplierError(f"이미 존재하는 계정명입니다: {account_name}")
+
+        new_account = SupplierAccount(
+            supplier_id=supplier_id,
+            account_name=account_name,
+            username=username,
+            password_encrypted=password,  # 실제 환경에서는 해시화 필요
+            default_margin_rate=default_margin_rate,
+            is_active=is_active,
+            sync_enabled=sync_enabled,
+            usage_count=0,
+            total_requests=0,
+            successful_requests=0,
+            failed_requests=0
+        )
+        self.db.add(new_account)
+        await self.db.commit()
+        await self.db.refresh(new_account)
+
+        self.logger.info(f"공급사 계정 생성 완료: {account_name} (ID: {new_account.id})")
+        return new_account
+
+    async def update_supplier_account(
+        self,
+        supplier_id: int,
+        account_id: int,
+        account_name: Optional[str] = None,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        default_margin_rate: Optional[float] = None,
+        is_active: Optional[bool] = None,
+        sync_enabled: Optional[bool] = None
+    ) -> Optional[SupplierAccount]:
+        """공급사 계정 정보 수정"""
+        # 계정 존재 확인
+        result = await self.db.execute(
+            select(SupplierAccount).where(
+                and_(
+                    SupplierAccount.id == account_id,
+                    SupplierAccount.supplier_id == supplier_id,
+                    SupplierAccount.is_active == True
+                )
+            )
+        )
+        account = result.scalar_one_or_none()
+        if not account:
+            return None
+
+        # 업데이트할 필드들
+        update_data = {}
+        if account_name is not None:
+            update_data['account_name'] = account_name
+        if username is not None:
+            update_data['username'] = username
+        if password is not None:
+            update_data['password_encrypted'] = password  # 실제 환경에서는 해시화 필요
+        if default_margin_rate is not None:
+            update_data['default_margin_rate'] = default_margin_rate
+        if is_active is not None:
+            update_data['is_active'] = is_active
+        if sync_enabled is not None:
+            update_data['sync_enabled'] = sync_enabled
+
+        update_data['updated_at'] = datetime.now()
+
+        # 업데이트 실행
+        await self.db.execute(
+            update(SupplierAccount).where(SupplierAccount.id == account_id).values(**update_data)
+        )
+        await self.db.commit()
+
+        # 업데이트된 계정 조회
+        await self.db.refresh(account)
+        self.logger.info(f"공급사 계정 수정 완료: {account.account_name} (ID: {account_id})")
+        return account
+
