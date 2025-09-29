@@ -469,3 +469,119 @@ class PriceCalculationHistory(Base):
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+
+# 재고 정보 테이블
+class Inventory(Base):
+    __tablename__ = "inventories"
+
+    id = Column(String, primary_key=True, index=True)
+    product_id = Column(String, unique=True, index=True, nullable=False)  # 상품 ID
+    supplier_id = Column(String, index=True)  # 공급사 ID
+    
+    # 재고 수량
+    available_quantity = Column(Integer, default=0)  # 가용 재고
+    reserved_quantity = Column(Integer, default=0)  # 예약된 재고
+    total_quantity = Column(Integer, default=0)  # 총 재고 (가용 + 예약)
+    
+    # 재고 임계값
+    low_stock_threshold = Column(Integer, default=10)  # 재고 부족 임계값
+    out_of_stock_threshold = Column(Integer, default=0)  # 품절 임계값
+    
+    # 재고 상태
+    stock_status = Column(String, default="in_stock")  # in_stock, low_stock, out_of_stock
+    last_synced_at = Column(DateTime(timezone=True))  # 마지막 동기화 시각
+    
+    # 알림 설정
+    enable_low_stock_alert = Column(Boolean, default=True)  # 재고 부족 알림 활성화
+    last_alerted_at = Column(DateTime(timezone=True))  # 마지막 알림 시각
+    
+    # 메타데이터
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# 재고 변동 이력 테이블
+class InventoryHistory(Base):
+    __tablename__ = "inventory_history"
+
+    id = Column(String, primary_key=True, index=True)
+    inventory_id = Column(String, index=True)  # 재고 ID
+    product_id = Column(String, index=True)  # 상품 ID
+    
+    # 변동 정보
+    change_type = Column(String, nullable=False)  # increase, decrease, sync, adjust
+    quantity_before = Column(Integer)  # 변동 전 수량
+    quantity_after = Column(Integer)  # 변동 후 수량
+    quantity_changed = Column(Integer)  # 변동량
+    
+    # 변동 사유
+    reason = Column(String)  # order, return, sync, manual, damaged 등
+    reference_id = Column(String)  # 참조 ID (주문 ID, 동기화 ID 등)
+    notes = Column(Text)  # 비고
+    
+    # 메타데이터
+    created_by = Column(String)  # 변동 실행자
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# 재고 알림 테이블
+class InventoryAlert(Base):
+    __tablename__ = "inventory_alerts"
+
+    id = Column(String, primary_key=True, index=True)
+    inventory_id = Column(String, index=True)  # 재고 ID
+    product_id = Column(String, index=True)  # 상품 ID
+    supplier_id = Column(String, index=True)  # 공급사 ID
+    
+    # 알림 정보
+    alert_type = Column(String, nullable=False)  # low_stock, out_of_stock, critical
+    alert_level = Column(String, default="warning")  # info, warning, error, critical
+    
+    # 재고 상태
+    current_quantity = Column(Integer)  # 현재 재고
+    threshold_quantity = Column(Integer)  # 임계값
+    
+    # 알림 메시지
+    title = Column(String)  # 알림 제목
+    message = Column(Text)  # 알림 메시지
+    
+    # 알림 상태
+    is_read = Column(Boolean, default=False)  # 읽음 여부
+    is_resolved = Column(Boolean, default=False)  # 해결 여부
+    resolved_at = Column(DateTime(timezone=True))  # 해결 시각
+    resolved_by = Column(String)  # 해결자
+    
+    # 메타데이터
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# 재고 동기화 이력 테이블
+class InventorySyncHistory(Base):
+    __tablename__ = "inventory_sync_history"
+
+    id = Column(String, primary_key=True, index=True)
+    supplier_id = Column(String, index=True)  # 공급사 ID
+    
+    # 동기화 정보
+    sync_type = Column(String, default="manual")  # manual, auto, scheduled
+    sync_status = Column(String, default="pending")  # pending, running, completed, failed
+    
+    # 동기화 결과
+    total_products = Column(Integer, default=0)  # 총 상품 수
+    synced_products = Column(Integer, default=0)  # 동기화된 상품 수
+    failed_products = Column(Integer, default=0)  # 실패한 상품 수
+    
+    # 동기화 시간
+    started_at = Column(DateTime(timezone=True))  # 시작 시각
+    completed_at = Column(DateTime(timezone=True))  # 완료 시각
+    duration_seconds = Column(Integer)  # 소요 시간 (초)
+    
+    # 에러 정보
+    error_message = Column(Text)  # 에러 메시지
+    error_details = Column(Text)  # JSON 형태의 상세 에러 정보
+    
+    # 메타데이터
+    created_by = Column(String)  # 실행자
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
